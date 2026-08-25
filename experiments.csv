@@ -1,2 +1,3 @@
 date,experiment_id,hypothesis,change,motivation,training_window,validation_window,metric,result,decision,notes
-2026-08-25,W0-001,Lock research design,Created protocol and clean-panel scope,Prevent untracked adaptation before final test,2005-2023,2024-2025,N/A,Design locked,Proceed,Final test remains untouched
+2026-08-25,W0-001,Lock research design,Created protocol and clean-panel scope,Prevent untracked adaptation before final test,2005-2019,2020-2023,N/A,Design locked,Proceed,2024-2025 is final test only and is not a validation window
+2026-08-25,W1-001,Build point-in-time eligible universe,Added auditable classification and investability rules plus 20-trading-day target,Establish a leakage-safe research panel before signals,2005-2019,2020-2023,Panel validation,21104236 panel rows; 8399139 eligible; 8321030 eligible with target,Proceed,2024-2025 remains final test only; target is censored if 20 later returns are incomplete

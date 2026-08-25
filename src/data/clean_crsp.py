@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RAW = ROOT / "crsp" / "yb8xejbnpiflaprb.csv"
 OUT = ROOT / "data" / "processed" / "crsp_daily_panel"
 SUMMARY = ROOT / "data" / "processed" / "cleaning_validation.csv"
+SECURITY_AUDIT = ROOT / "data" / "processed" / "security_filter_audit.csv"
 
 
 def write_summary(con) -> None:
@@ -55,8 +56,26 @@ def main() -> None:
     universe = """
         USIncFlg = 'Y' AND SecurityType = 'EQTY' AND SecuritySubType = 'COM'
         AND ShareType = 'NS' AND PrimaryExch IN ('N', 'A', 'Q')
+        AND IssuerType = 'CORP' AND ConditionalType = 'RW'
+        AND TradingStatusFlg = 'A'
     """
     con.execute(f"CREATE VIEW raw AS SELECT * FROM {source}")
+    con.execute(f"""
+        COPY (
+            SELECT
+                COALESCE(IssuerType, '<NULL>') AS issuer_type,
+                COALESCE(ConditionalType, '<NULL>') AS conditional_type,
+                COALESCE(TradingStatusFlg, '<NULL>') AS trading_status_flag,
+                COUNT(*) AS rows
+            FROM raw
+            WHERE {valid}
+              AND USIncFlg = 'Y' AND SecurityType = 'EQTY' AND SecuritySubType = 'COM'
+              AND ShareType = 'NS' AND PrimaryExch IN ('N', 'A', 'Q')
+              AND TRY_CAST(DlyCalDt AS DATE) BETWEEN DATE '2005-01-01' AND DATE '2025-12-31'
+            GROUP BY 1, 2, 3
+            ORDER BY rows DESC
+        ) TO '{SECURITY_AUDIT.as_posix()}' (HEADER, DELIMITER ',')
+    """)
     con.execute(f"""
         COPY (
             SELECT DISTINCT
@@ -66,6 +85,9 @@ def main() -> None:
                 TRY_CAST(DlyPrc AS DOUBLE) AS price,
                 TRY_CAST(DlyVol AS BIGINT) AS volume,
                 TRY_CAST(DlyCap AS DOUBLE) AS market_cap,
+                TRY_CAST(ShrOut AS DOUBLE) AS shares_outstanding,
+                TRY_CAST(vwretd AS DOUBLE) AS value_weighted_market_return,
+                TRY_CAST(DlyRetx AS DOUBLE) AS return_ex_dividends,
                 SecInfoStartDt AS sec_info_start_date,
                 SecInfoEndDt AS sec_info_end_date,
                 PrimaryExch AS primary_exchange,
@@ -73,6 +95,8 @@ def main() -> None:
                 SecurityType AS security_type,
                 SecuritySubType AS security_subtype,
                 ShareType AS share_type,
+                IssuerType AS issuer_type,
+                ConditionalType AS conditional_type,
                 TradingStatusFlg AS trading_status_flag,
                 SecurityActiveFlg AS security_active_flag,
                 DlyDelFlg AS delisting_flag,

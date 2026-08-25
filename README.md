@@ -16,6 +16,7 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 python src/data/clean_crsp.py
+python src/data/build_research_panel.py
 ```
 
 The raw export is deliberately excluded from Git. Place it at
@@ -24,6 +25,11 @@ The raw export is deliberately excluded from Git. Place it at
 The command writes a year-partitioned daily panel under
 `data/processed/crsp_daily_panel/` plus a validation summary at
 `data/processed/cleaning_validation.csv`.
+
+The second command applies the locked point-in-time investability screen and
+writes the eligible-universe/20-trading-day-target panel to
+`data/processed/research_panel/`, with its audit in
+`data/processed/research_panel_validation.csv`.
 
 ## Project layout
 

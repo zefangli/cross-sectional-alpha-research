@@ -19,6 +19,10 @@ survive turnover and transaction costs?
 - **Initial universe:** point-in-time U.S. common equity listed on
   NYSE, AMEX, or Nasdaq, using only classifications valid on the row date,
   followed by price, liquidity, and trailing-history screens.
+- **Security classification rule:** retain only `IssuerType = CORP`,
+  `ConditionalType = RW`, and `TradingStatusFlg = A`; audit the excluded
+  values in `data/processed/security_filter_audit.csv`. Do not use
+  `SecurityActiveFlg` as a filter because it risks survivorship bias.
 
 ## Target and timing
 
@@ -26,6 +30,12 @@ survive turnover and transaction costs?
 - All features at date *t* use only observations available at or before *t*.
 - The cleaner produces only the validated daily panel; target construction is
   a later, separately tested step.
+- **Delistings:** the target compounds the exported `DlyRet` values from
+  *t*+1 through *t*+20 only when all 20 returns are present. The current
+  export has no non-`N` `DlyDelFlg` values and no separate delisting-return
+  field, so it cannot establish that final observed returns include delisting
+  outcomes. Targets without 20 observed returns are left missing rather than
+  assuming a zero post-exit return.
 
 ## Planned signals
 

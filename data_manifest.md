@@ -28,3 +28,14 @@ eligible export. The cleaner retains one copy only when every selected panel
 field is identical (`SELECT DISTINCT`); it does not arbitrarily resolve rows
 that differ in retained fields. The cleaned-panel audit must report zero
 duplicate groups before feature work.
+
+## Delisting-return limitation
+
+`DlyRet` is retained unchanged as the export's daily total return, including
+the final observed row for each `PERMNO`. In the filtered initial panel, 9,872
+of 9,873 final rows have a nonmissing `DlyRet` (range -94.6872% to 435.2430%);
+all `DlyDelFlg` values are `N`. This does **not** demonstrate that those final
+returns include CRSP delisting returns: the export contains no separate
+delisting-return variable. The 20-day target is therefore censored when fewer
+than 20 later daily returns are observed. Obtain and merge explicit CRSP
+delisting-return data before making claims about delisting-complete targets.

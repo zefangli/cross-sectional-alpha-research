@@ -5,6 +5,7 @@ data/processed/
 data/interim/
 data/raw_hash.txt
 data/cleaning_run*.log
+data/research_panel_run*.log
 
 # Python and notebook noise.
 __pycache__/
