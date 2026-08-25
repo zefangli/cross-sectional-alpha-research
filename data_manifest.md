@@ -20,3 +20,11 @@
 
 Never open, modify, or re-export the raw file in place. Generated data must
 be written under `data/processed/` and can always be rebuilt from this export.
+
+## Initial cleaning audit
+
+The first streaming audit found 1,594 duplicate `PERMNO`/date groups in the
+eligible export. The cleaner retains one copy only when every selected panel
+field is identical (`SELECT DISTINCT`); it does not arbitrarily resolve rows
+that differ in retained fields. The cleaned-panel audit must report zero
+duplicate groups before feature work.

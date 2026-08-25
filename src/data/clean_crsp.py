@@ -8,11 +8,40 @@ OUT = ROOT / "data" / "processed" / "crsp_daily_panel"
 SUMMARY = ROOT / "data" / "processed" / "cleaning_validation.csv"
 
 
+def write_summary(con) -> None:
+    con.execute(f"CREATE VIEW clean AS SELECT * FROM parquet_scan('{OUT.as_posix()}/**/*.parquet')")
+    con.execute(f"""
+        COPY (
+            SELECT metric, value FROM (
+                SELECT 'panel_rows' AS metric, COUNT(*)::VARCHAR AS value FROM clean
+                UNION ALL SELECT 'invalid_classification_dates_in_panel', COUNT(*)::VARCHAR FROM clean
+                    WHERE date NOT BETWEEN TRY_CAST(sec_info_start_date AS DATE) AND TRY_CAST(sec_info_end_date AS DATE)
+                UNION ALL SELECT 'missing_returns', COUNT(*)::VARCHAR FROM clean WHERE ret IS NULL
+                UNION ALL SELECT 'zero_volume', COUNT(*)::VARCHAR FROM clean WHERE volume = 0
+                UNION ALL SELECT 'duplicate_permno_date_groups', COUNT(*)::VARCHAR FROM (
+                    SELECT permno, date FROM clean GROUP BY 1, 2 HAVING COUNT(*) > 1
+                )
+                UNION ALL SELECT 'rows_with_delisting_flag', COUNT(*)::VARCHAR FROM clean
+                    WHERE COALESCE(delisting_flag, '') NOT IN ('', 'N')
+                UNION ALL SELECT 'first_date', MIN(date)::VARCHAR FROM clean
+                UNION ALL SELECT 'last_date', MAX(date)::VARCHAR FROM clean
+                UNION ALL SELECT 'delisting_flag:' || COALESCE(delisting_flag, '<NULL>'), COUNT(*)::VARCHAR
+                    FROM clean GROUP BY delisting_flag
+            )
+        ) TO '{SUMMARY.as_posix()}' (HEADER, DELIMITER ',')
+    """)
+
+
 def main() -> None:
     try:
         import duckdb
     except ModuleNotFoundError:
         sys.exit("DuckDB is required. Run: python -m pip install -r requirements.txt")
+    if "--validate-only" in sys.argv:
+        con = duckdb.connect()
+        write_summary(con)
+        print(f"Wrote validation: {SUMMARY}")
+        return
     if not RAW.exists():
         sys.exit(f"Raw file not found: {RAW}")
 
@@ -30,7 +59,7 @@ def main() -> None:
     con.execute(f"CREATE VIEW raw AS SELECT * FROM {source}")
     con.execute(f"""
         COPY (
-            SELECT
+            SELECT DISTINCT
                 TRY_CAST(PERMNO AS BIGINT) AS permno,
                 TRY_CAST(DlyCalDt AS DATE) AS date,
                 TRY_CAST(DlyRet AS DOUBLE) AS ret,
@@ -56,23 +85,7 @@ def main() -> None:
               AND TRY_CAST(DlyCalDt AS DATE) BETWEEN DATE '2005-01-01' AND DATE '2025-12-31'
         ) TO '{OUT.as_posix()}' (FORMAT PARQUET, PARTITION_BY (year), OVERWRITE_OR_IGNORE TRUE)
     """)
-    con.execute(f"""
-        COPY (
-            SELECT metric, value FROM (
-                SELECT 'raw_rows' AS metric, COUNT(*)::VARCHAR AS value FROM raw
-                UNION ALL SELECT 'invalid_classification_dates', COUNT(*)::VARCHAR FROM raw WHERE NOT ({valid})
-                UNION ALL SELECT 'eligible_rows', COUNT(*)::VARCHAR FROM raw WHERE {valid} AND {universe}
-                UNION ALL SELECT 'missing_returns', COUNT(*)::VARCHAR FROM raw WHERE {valid} AND {universe} AND TRY_CAST(DlyRet AS DOUBLE) IS NULL
-                UNION ALL SELECT 'zero_volume', COUNT(*)::VARCHAR FROM raw WHERE {valid} AND {universe} AND TRY_CAST(DlyVol AS BIGINT) = 0
-                UNION ALL SELECT 'duplicate_permno_date_rows', COUNT(*)::VARCHAR FROM (
-                    SELECT PERMNO, DlyCalDt FROM raw WHERE {valid} AND {universe} GROUP BY 1, 2 HAVING COUNT(*) > 1
-                )
-                UNION ALL SELECT 'rows_with_delisting_flag', COUNT(*)::VARCHAR FROM raw WHERE {valid} AND {universe} AND COALESCE(DlyDelFlg, '') NOT IN ('', 'N')
-                UNION ALL SELECT 'first_date', MIN(TRY_CAST(DlyCalDt AS DATE))::VARCHAR FROM raw
-                UNION ALL SELECT 'last_date', MAX(TRY_CAST(DlyCalDt AS DATE))::VARCHAR FROM raw
-            )
-        ) TO '{SUMMARY.as_posix()}' (HEADER, DELIMITER ',')
-    """)
+    write_summary(con)
     print(f"Wrote panel: {OUT}")
     print(f"Wrote validation: {SUMMARY}")
 
