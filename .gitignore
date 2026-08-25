@@ -1,0 +1,18 @@
+# Raw vendor exports and generated research data stay local.
+crsp/
+data/raw/
+data/processed/
+data/interim/
+data/raw_hash.txt
+data/cleaning_run*.log
+
+# Python and notebook noise.
+__pycache__/
+*.py[cod]
+.venv/
+.ipynb_checkpoints/
+
+# Local secrets and operating-system files.
+.env
+.DS_Store
+Thumbs.db

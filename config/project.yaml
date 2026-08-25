@@ -1,0 +1,7 @@
+sample_start: 2005-01-01
+sample_end: 2025-12-31
+final_test_start: 2024-01-01
+final_test_end: 2025-12-31
+target_trading_days: 20
+cost_bps: [1, 5, 10, 20]
+primary_exchanges: [N, A, Q]

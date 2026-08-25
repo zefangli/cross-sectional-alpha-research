@@ -1,0 +1,2 @@
+date,experiment_id,hypothesis,change,motivation,training_window,validation_window,metric,result,decision,notes
+2026-08-25,W0-001,Lock research design,Created protocol and clean-panel scope,Prevent untracked adaptation before final test,2005-2023,2024-2025,N/A,Design locked,Proceed,Final test remains untouched
