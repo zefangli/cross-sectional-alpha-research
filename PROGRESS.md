@@ -31,10 +31,35 @@
 - Factor tests cover the known-value window, the skipped recent month, future
   perturbation, history gaps, turnover with position exits, and Newey-West.
 
+- All six locked signals implemented and evaluated through the same harness:
+  `mom_120_20`, `rev_5`, `rvol_20`, `vs_20`, `rmom_120_20`, `dd_252`. Residual
+  momentum fits one SQL expression because the sum of market-model residuals
+  has a closed form in window aggregates; a test checks it against an explicit
+  numpy OLS fit.
+- Verified that `price`, `volume` and `shares_outstanding` are as-traded in this
+  export while `ret` is split-adjusted (checked on Apple's 2014 7:1 split), so
+  volume surprise uses turnover and drawdown uses a cumulative return index.
+  Both have split-invariance tests.
+- Portfolio statistics are now averaged over all 20 rebalance offsets. A single
+  offset gave `rev_5` a negative gross Sharpe despite a significantly positive
+  IC; the offset spread runs -0.315 to +0.547 for that factor.
+- Maximum drawdown now floors the running peak at starting wealth 1.0.
+- Week 2 result: `rvol_20` and `vs_20` survive Bonferroni across the six tests;
+  `rev_5` does not; `dd_252` is insignificant; `mom_120_20` is a null and
+  `rmom_120_20` is a null with the wrong sign. No factor is viable at 20 bp and
+  only `mom_120_20` and `rvol_20` are positive at 10 bp. Five of six show
+  hump-shaped decile returns, so tail-decile books understate the signals.
+- Logged as W2-002 .. W2-007 and written up in `reports/factor_memo_week2.md`;
+  the portfolio numbers in `reports/factor_memo_01_momentum.md` are superseded.
+- 20 tests pass, including a shared leakage test that perturbs every input on
+  every row after t and asserts all six factors are unchanged at t.
+
 ## Next
 
-- Apply the same harness to reversal, realised volatility, volume surprise,
-  residual momentum and drawdown by adding entries to `FACTOR_SQL` /
-  `FACTOR_SIGN`; nothing in the evaluation changes.
-- Extend the first factor memo into the combined Week 2 factor-research memo
-  once all six results exist.
+- Week 3: walk-forward splitting and portfolio infrastructure. Two Week 2
+  findings should shape it: use rank-based continuous weights rather than
+  tail-decile books, and report portfolio statistics averaged over rebalance
+  offsets with the spread.
+- Check whether `rvol_20`, `dd_252`, `mom_120_20` and `rmom_120_20` are four
+  signals or one before combining them; their bottom deciles look like the same
+  distressed, high-volatility names.

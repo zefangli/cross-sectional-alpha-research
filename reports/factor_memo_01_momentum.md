@@ -1,5 +1,14 @@
 # Factor memo 01 — medium-term momentum (`mom_120_20`)
 
+> **Revision, 2026-08-30 (W2-007).** The portfolio statistics in section 7 are
+> superseded by `factor_memo_week2.md`. Two estimator corrections were applied
+> after this memo was written: maximum drawdown now floors the running peak at
+> the starting wealth of 1.0, and portfolio statistics are now averaged over all
+> 20 rebalance offsets instead of using a single one. For momentum this moves
+> gross Sharpe 0.188 -> 0.147, net Sharpe at 10 bp 0.088 -> 0.048, and breakeven
+> ~19 bp -> ~14.9 bp. The IC, decile, coverage and persistence results below are
+> unchanged, and so are the conclusions. The factor was not re-tuned.
+
 **Date:** 2026-08-30
 **Experiment:** `W2-001`
 **Evaluation sample:** 2006-01-03 to 2023-11-30 (4,509 dates)

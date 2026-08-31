@@ -11,6 +11,11 @@ Weights sum to +1 long and -1 short (gross leverage 2). Turnover is
 TO_t = 0.5 * sum_i |w_it - w_i,t-1|, so a full rotation is TO = 2 and the traded
 notional is sum_i |dw| = 2 * TO. Costs are charged on traded notional:
 net = gross - 2 * c * TO. The first rebalance pays the cost of building the book.
+
+A 20-day rebalance can begin on any of 20 trading-day offsets, and at the
+turnover these factors run, that choice moves the result materially. Every
+portfolio statistic is therefore the average over all 20 staggered books, and
+the spread of gross Sharpe across offsets is reported as sampling uncertainty.
 """
 from pathlib import Path
 import sys
@@ -20,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import numpy as np
 import pandas as pd
 
-from src.features.factors import FACTOR_SIGN, factor_query
+from src.features.factors import ALL_FACTORS, FACTOR_SIGN, factor_query
 
 ROOT = Path(__file__).resolve().parents[2]
 PANEL = ROOT / "data" / "processed" / "research_panel"
@@ -89,13 +94,16 @@ def performance(returns: pd.Series) -> dict:
     """Annualised stats for a series of non-overlapping 20-day period returns."""
     mean, sd = returns.mean(), returns.std(ddof=1)
     growth = (1 + returns).cumprod()
+    # Peak is floored at the starting wealth of 1.0, so a loss before any new
+    # high still counts as drawdown.
+    peak = growth.cummax().clip(lower=1.0)
     return {
         "mean_period_return": mean,
         "annualised_return": mean * PERIODS_PER_YEAR,
         "annualised_volatility": sd * np.sqrt(PERIODS_PER_YEAR),
         "sharpe": mean / sd * np.sqrt(PERIODS_PER_YEAR),
         "hit_rate": (returns > 0).mean(),
-        "max_drawdown": float((growth / growth.cummax() - 1).min()),
+        "max_drawdown": float((growth / peak - 1).min()),
     }
 
 
@@ -134,24 +142,31 @@ def evaluate(con, source: str, name: str, cutoff: str = CUTOFF) -> dict:
         GROUP BY decile ORDER BY decile
     """).df()
 
-    con.execute(f"""
-        CREATE OR REPLACE TEMP TABLE rebalance AS
-        SELECT date FROM (SELECT DISTINCT tdi, date FROM xs) QUALIFY
-            (ROW_NUMBER() OVER (ORDER BY tdi) - 1) % {REBALANCE_DAYS} = 0
-    """)
     weights = con.sql(f"""
-        SELECT date, permno, y, w FROM (
-            SELECT date, permno, y,
+        SELECT tdi, date, permno, y, w FROM (
+            SELECT tdi, date, permno, y,
                 CASE WHEN decile = 10
                           THEN {sign} * 1.0 / COUNT(*) FILTER (decile = 10) OVER d
                      WHEN decile = 1
                           THEN {-sign} * 1.0 / COUNT(*) FILTER (decile = 1) OVER d
                 END AS w
-            FROM xs WHERE date IN (SELECT date FROM rebalance)
-            WINDOW d AS (PARTITION BY date)
+            FROM xs WINDOW d AS (PARTITION BY date)
         ) WHERE w IS NOT NULL
     """).df()
-    book = portfolio(weights)
+    # A 20-day rebalance can start on any of 20 offsets, and with turnover this
+    # high the choice moves the answer. Run all 20 staggered books and report
+    # the average, plus the spread across offsets as sampling uncertainty.
+    calendar = weights[["tdi", "date"]].drop_duplicates().sort_values("tdi").date
+    books = []
+    for offset in range(REBALANCE_DAYS):
+        dates = set(calendar.iloc[offset::REBALANCE_DAYS])
+        books.append(portfolio(weights[weights.date.isin(dates)]).assign(offset=offset))
+    columns = ["gross_return"] + [f"net_return_{b}bp" for b in COSTS_BPS]
+    per_offset = pd.DataFrame([
+        {"offset": book.offset.iloc[0], "rebalances": len(book),
+         "mean_turnover": book.turnover.mean(),
+         **{f"{c}_{k}": v for c in columns for k, v in performance(book[c]).items()}}
+        for book in books])
 
     summary = {
         "factor": name, "hypothesised_sign": sign,
@@ -170,13 +185,18 @@ def evaluate(con, source: str, name: str, cutoff: str = CUTOFF) -> dict:
         "share_ic_spearman_positive": (daily.ic_spearman > 0).mean(),
         "mean_rank_autocorr_1d": autocorr.rank_autocorr_1d.mean(),
         "mean_rank_autocorr_20d": autocorr.rank_autocorr_20d.mean(),
+        "mean_ic_spearman_signed": sign * daily.ic_spearman.mean(),
         "decile_spread_20d": (deciles.mean_forward_return_20d.iloc[-1]
                               - deciles.mean_forward_return_20d.iloc[0]),
-        "rebalances": len(book), "mean_turnover": book.turnover.mean(),
+        "decile_spread_signed": sign * (deciles.mean_forward_return_20d.iloc[-1]
+                                        - deciles.mean_forward_return_20d.iloc[0]),
     }
-    for column in ["gross_return"] + [f"net_return_{b}bp" for b in COSTS_BPS]:
-        for key, value in performance(book[column]).items():
-            summary[f"{column}_{key}"] = value
+    # Portfolio statistics are averaged over the 20 rebalance offsets.
+    summary.update(per_offset.drop(columns="offset").mean().to_dict())
+    summary["gross_return_sharpe_sd_across_offsets"] = \
+        per_offset.gross_return_sharpe.std(ddof=1)
+    summary["gross_return_sharpe_min_offset"] = per_offset.gross_return_sharpe.min()
+    summary["gross_return_sharpe_max_offset"] = per_offset.gross_return_sharpe.max()
 
     yearly = daily.assign(year=daily.date.dt.year).groupby("year").agg(
         dates=("date", "size"), mean_names=("n_used", "mean"),
@@ -185,7 +205,8 @@ def evaluate(con, source: str, name: str, cutoff: str = CUTOFF) -> dict:
     ).reset_index()
 
     return {"daily": daily.merge(autocorr, on="date", how="left"), "deciles": deciles,
-            "portfolio": book.reset_index(), "yearly": yearly,
+            "portfolio": pd.concat(books).reset_index(), "offsets": per_offset,
+            "yearly": yearly,
             "summary": pd.DataFrame([summary]).T.rename(columns={0: "value"})}
 
 
@@ -194,7 +215,8 @@ def figure(name: str, out: dict, path: Path) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    daily, book = out["daily"].set_index("date"), out["portfolio"].set_index("date")
+    daily = out["daily"].set_index("date")
+    book = out["portfolio"].query("offset == 0").set_index("date")
     fig, ax = plt.subplots(2, 2, figsize=(12, 8))
     daily.ic_spearman.rolling(252).mean().plot(ax=ax[0, 0])
     ax[0, 0].axhline(0, color="k", lw=0.8)
@@ -207,7 +229,7 @@ def figure(name: str, out: dict, path: Path) -> None:
     for column in ["gross_return"] + [f"net_return_{b}bp" for b in COSTS_BPS]:
         (1 + book[column]).cumprod().plot(ax=ax[1, 1], label=column, logy=True)
     ax[1, 1].legend(fontsize=7)
-    ax[1, 1].set_title("Long-short cumulative growth, 20-day rebalance")
+    ax[1, 1].set_title("Long-short cumulative growth (rebalance offset 0 of 20)")
     fig.suptitle(f"{name}: {out['summary'].loc['first_date', 'value']} to "
                  f"{out['summary'].loc['last_date', 'value']}")
     fig.tight_layout()
@@ -217,18 +239,24 @@ def figure(name: str, out: dict, path: Path) -> None:
 def main() -> None:
     import duckdb
 
-    name = sys.argv[1] if len(sys.argv) > 1 else "mom_120_20"
+    names = sys.argv[1:] or ALL_FACTORS
     if not PANEL.exists():
         sys.exit("Research panel not found. Run src/data/build_research_panel.py first.")
-    outdir = REPORTS / f"factor_{name}"
-    outdir.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
-    out = evaluate(con, f"parquet_scan('{(PANEL / '**' / '*.parquet').as_posix()}')", name)
-    for key, frame in out.items():
-        frame.to_csv(outdir / f"{key}.csv", index=(key == "summary"))
-    figure(name, out, outdir / "diagnostics.png")
-    print(out["summary"].to_string())
-    print(f"\nWrote {outdir}")
+    source = f"parquet_scan('{(PANEL / '**' / '*.parquet').as_posix()}')"
+    summaries = []
+    for name in names:
+        outdir = REPORTS / f"factor_{name}"
+        outdir.mkdir(parents=True, exist_ok=True)
+        out = evaluate(con, source, name)
+        for key, frame in out.items():
+            frame.to_csv(outdir / f"{key}.csv", index=(key == "summary"))
+        figure(name, out, outdir / "diagnostics.png")
+        summaries.append(out["summary"].rename(columns={"value": name}))
+        print(out["summary"].to_string(), "\n\nWrote", outdir, "\n", flush=True)
+    combined = pd.concat(summaries, axis=1)
+    combined.to_csv(REPORTS / "factor_summary.csv")
+    print(combined.to_string())
 
 
 if __name__ == "__main__":
