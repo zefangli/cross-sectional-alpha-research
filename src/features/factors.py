@@ -119,7 +119,24 @@ ALL_FACTORS = list(FACTOR_SQL)
 
 def factor_query(source: str, name: str) -> str:
     """Panel rows plus one factor column, keeping panel keys, target and flags."""
+    return _query(source, {FACTOR_SQL[name]: "f"})
+
+
+def factor_panel_query(source: str, names=None) -> str:
+    """Panel rows plus every named factor as its own `f_<name>` column.
+
+    One pass for all six, so the shared windows and the running return index are
+    computed once rather than once per factor.
+    """
+    names = names or ALL_FACTORS
+    return _query(source, {FACTOR_SQL[n]: f"f_{n}" for n in names},
+                  extra=f"ret, {_MKT},")
+
+
+def _query(source: str, columns: dict, extra: str = "") -> str:
     windows = ",\n                ".join(f"{k} AS ({v})" for k, v in WINDOWS.items())
+    selected = ",\n               ".join(f"({expr}) AS {alias}"
+                                         for expr, alias in columns.items())
     return f"""
         WITH calendar AS (
             SELECT date, ROW_NUMBER() OVER (ORDER BY date) - 1 AS tdi
@@ -145,7 +162,8 @@ def factor_query(source: str, name: str) -> str:
             WINDOW p AS (PARTITION BY permno ORDER BY tdi)
         )
         SELECT permno, date, tdi, eligibility_flag, forward_return_20d,
-               ({FACTOR_SQL[name]}) AS f
+               {extra}
+               {selected}
         FROM lagged
         WINDOW
                 {windows}

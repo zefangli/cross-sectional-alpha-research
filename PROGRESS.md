@@ -60,12 +60,36 @@
 - 20 tests pass, including a shared leakage test that perturbs every input on
   every row after t and asserts all six factors are unchanged at t.
 
+## Week 3
+
+- Aligned six-factor rank panel materialised at `data/processed/factor_panel/`:
+  8,319,133 rows, 99.05% of eligible, mean 1,660 names per date.
+- Cross-factor structure measured (W3-001). The Week 2 suspicion is confirmed:
+  `rmom_120_20` and `mom_120_20` correlate 0.73 by rank and 0.76 by portfolio
+  return; `rvol_20` and `dd_252` books correlate 0.87. Only `rev_5` and `vs_20`
+  are independent. Portfolio-return correlation is the informative measure --
+  `mom_120_20` and `rvol_20` look independent by rank (-0.10) yet their books
+  correlate 0.46.
+- Ten fixed expanding walk-forward folds with a 20-trading-day purge before each
+  validation year, so no fold trains on returns realised inside its validation
+  window (W3-002). Final fold stops at 2023-11-30.
+- Baseline portfolio built: dollar-neutral, 1% position cap, rank-continuous
+  weights, 20 staggered daily cohorts, daily-marked P&L, turnover, costs and
+  exposures (W3-003). Composite gross Sharpe 0.121, breakeven 8.7 bp, nothing
+  clears 10 bp. The position cap never binds at this universe size.
+- Dollar-neutral is not beta-neutral: `rvol_20` carries beta -0.34, `dd_252`
+  -0.28, the composite -0.23, negative in every rolling 252-day window.
+- Weighting ablation (W3-004) rejected the Week 2 claim that rank-continuous
+  weights would improve on tail deciles: decile weighting wins 5 of 7 on gross
+  Sharpe and 6 of 7 on turnover. Rank weighting is kept as the pre-declared
+  Week 4 baseline regardless, and both are carried forward.
+- 32 tests pass.
+
 ## Next
 
-- Week 3: walk-forward splitting and portfolio infrastructure. Two Week 2
-  findings should shape it: use rank-based continuous weights rather than
-  tail-decile books, and report portfolio statistics averaged over rebalance
-  offsets with the spread.
-- Check whether `rvol_20`, `dd_252`, `mom_120_20` and `rmom_120_20` are four
-  signals or one before combining them; their bottom deciles look like the same
-  distressed, high-volatility names.
+- Week 4: OLS sanity check, Ridge, and gradient boosting over the ten fixed
+  folds, compared on IC, rank IC and net portfolio results through the existing
+  backtest. The bar is a gross Sharpe of 0.147 and a 10.1 bp breakeven.
+- Expect any gain to come from weighting `rev_5` and `vs_20` above an equal
+  composite, since they are the only signals independent of the main cluster.
+- 2024-2025 stays sealed until Week 6.
