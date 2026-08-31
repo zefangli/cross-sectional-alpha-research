@@ -44,12 +44,18 @@
   offset gave `rev_5` a negative gross Sharpe despite a significantly positive
   IC; the offset spread runs -0.315 to +0.547 for that factor.
 - Maximum drawdown now floors the running peak at starting wealth 1.0.
-- Week 2 result: `rvol_20` and `vs_20` survive Bonferroni across the six tests;
-  `rev_5` does not; `dd_252` is insignificant; `mom_120_20` is a null and
+- Week 2 result: only `rvol_20` survives Bonferroni across the six tests;
+  `vs_20` and `rev_5` do not; `dd_252` is insignificant; `mom_120_20` is a null and
   `rmom_120_20` is a null with the wrong sign. No factor is viable at 20 bp and
   only `mom_120_20` and `rvol_20` are positive at 10 bp. Five of six show
   hump-shaped decile returns, so tail-decile books understate the signals.
-- Logged as W2-002 .. W2-007 and written up in `reports/factor_memo_week2.md`;
+- Timing corrected (W2-008): `vs_20` and `dd_252` originally used day-t inputs,
+  which is leakage-free against a t+1 target but implies same-close execution.
+  Both are now lagged to t-1, so all six factors are determined by the close of
+  t-1 and the shared leakage test perturbs row t itself. This cost `vs_20` about
+  a third of its IC (NW t 3.43 -> 2.50); `rvol_20` is now the only factor that
+  survives Bonferroni across the six tests.
+- Logged as W2-002 .. W2-008 and written up in `reports/factor_memo_week2.md`;
   the portfolio numbers in `reports/factor_memo_01_momentum.md` are superseded.
 - 20 tests pass, including a shared leakage test that perturbs every input on
   every row after t and asserts all six factors are unchanged at t.

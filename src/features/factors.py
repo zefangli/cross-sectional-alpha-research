@@ -1,11 +1,15 @@
 """Factor definitions.
 
 Every expression is a DuckDB window expression over the daily panel, and every
-named window is backward-looking, so a factor observed at date *t* can never
-read a row after *t*. Two windows (`w_peak`, `w_all`) include row *t* itself:
-the panel's target is the return over *t*+1 .. *t*+20, so quantities known at
-the close of *t* -- that day's price, return and volume -- are legitimately part
-of the information set.
+named window ends at *t*-1 or earlier, so every factor is fully determined by
+the close of *t*-1.
+
+That one-day gap is a tradability requirement, not just a leakage guard. The
+target is the return from the close of *t* to the close of *t*+20, so a signal
+that still needs *t*'s own close could only be traded at that same close. All
+six factors therefore leave a full day between their last input and the start of
+the target: the signal is known at the close of *t*-1 and can be executed any
+time during *t*.
 
 Each factor also asserts window completeness: the count of observed inputs and
 the earliest trading-day index in the window. A stock with a gap in its history
@@ -29,13 +33,15 @@ WINDOWS = {
     "w_mom": f"{_PARTITION} 120 PRECEDING AND 21 PRECEDING",
     # t-5 .. t-1: short-term reversal
     "w_rev": f"{_PARTITION} 5 PRECEDING AND 1 PRECEDING",
-    # t-20 .. t-1: realised volatility and the volume-surprise baseline
+    # t-20 .. t-1: realised volatility
     "w_vol": f"{_PARTITION} 20 PRECEDING AND 1 PRECEDING",
+    # t-21 .. t-2: the 20 days before the lagged turnover observation at t-1
+    "w_vs": f"{_PARTITION} 21 PRECEDING AND 2 PRECEDING",
     # t-272 .. t-21: 252-day market-model estimation window ending where the
     # residual-momentum window ends, so the momentum window is a subset of it
     "w_beta": f"{_PARTITION} 272 PRECEDING AND 21 PRECEDING",
-    # t-251 .. t: one-year running peak, inclusive of today
-    "w_peak": f"{_PARTITION} 251 PRECEDING AND CURRENT ROW",
+    # t-252 .. t-1: one-year running peak, ending at the lagged observation
+    "w_peak": f"{_PARTITION} 252 PRECEDING AND 1 PRECEDING",
 }
 
 _MKT = "value_weighted_market_return"
@@ -60,14 +66,15 @@ FACTOR_SQL = {
               AND MIN(tdi) OVER w_vol = tdi - 20
              THEN SQRT(SUM(ret * ret) OVER w_vol) END
     """,
-    # 5.4 volume surprise: log of today's share turnover against its 20-day
-    # mean. Turnover rather than share volume, because a split multiplies
-    # volume and shares outstanding together and cancels out of the ratio.
+    # 5.4 volume surprise: log of the previous day's share turnover against its
+    # own trailing 20-day mean. Turnover rather than share volume, because a
+    # split multiplies volume and shares outstanding together and cancels out of
+    # the ratio. Lagged to t-1 so the signal does not need t's own close.
     "vs_20": """
-        CASE WHEN COUNT(turnover) OVER w_vol = 20
-              AND MIN(tdi) OVER w_vol = tdi - 20
-              AND turnover > 0 AND AVG(turnover) OVER w_vol > 0
-             THEN LN(turnover / (AVG(turnover) OVER w_vol)) END
+        CASE WHEN COUNT(turnover) OVER w_vs = 20
+              AND MIN(tdi) OVER w_vs = tdi - 21
+              AND turnover_lag1 > 0 AND AVG(turnover) OVER w_vs > 0
+             THEN LN(turnover_lag1 / (AVG(turnover) OVER w_vs)) END
     """,
     # 5.5 residual momentum: fit r_i = alpha + beta * r_m over the 252 days
     # ending at t-21, then sum the implied residuals over t-120 .. t-21. The
@@ -84,14 +91,15 @@ FACTOR_SQL = {
                   - (regr_slope(ret, {_MKT}) OVER w_beta) * (SUM({_MKT}) OVER w_mom)
         END
     """,
-    # 5.6 drawdown from the one-year peak of the cumulative total-return index.
-    # Zero means the stock is at its 252-day high; the value is never positive.
-    # `cum` is a running index whose base cancels out of the ratio, so only the
+    # 5.6 drawdown from the one-year peak of the cumulative total-return index,
+    # measured as at t-1 so the signal does not need t's own close. Zero means
+    # the stock closed at its 252-day high; the value is never positive. `cum`
+    # is a running index whose base cancels out of the ratio, so only the
     # 252-day window itself has to be complete.
     "dd_252": """
         CASE WHEN COUNT(ret) OVER w_peak = 252
-              AND MIN(tdi) OVER w_peak = tdi - 251
-             THEN cum / (MAX(cum) OVER w_peak) - 1 END
+              AND MIN(tdi) OVER w_peak = tdi - 252
+             THEN cum_lag1 / (MAX(cum) OVER w_peak) - 1 END
     """,
 }
 
@@ -124,10 +132,21 @@ def factor_query(source: str, name: str) -> str:
                        PARTITION BY permno ORDER BY tdi
                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum
             FROM {source} JOIN calendar USING (date)
+        ), lagged AS (
+            -- Yesterday's values, but only when yesterday really is t-1 for this
+            -- stock; a gap in its history leaves these NULL rather than reaching
+            -- further back.
+            SELECT base.*,
+                   CASE WHEN LAG(tdi) OVER p = tdi - 1
+                        THEN LAG(turnover) OVER p END AS turnover_lag1,
+                   CASE WHEN LAG(tdi) OVER p = tdi - 1
+                        THEN LAG(cum) OVER p END AS cum_lag1
+            FROM base
+            WINDOW p AS (PARTITION BY permno ORDER BY tdi)
         )
         SELECT permno, date, tdi, eligibility_flag, forward_return_20d,
                ({FACTOR_SQL[name]}) AS f
-        FROM base
+        FROM lagged
         WINDOW
                 {windows}
     """

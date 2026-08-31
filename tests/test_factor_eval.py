@@ -85,9 +85,9 @@ def test_realised_volatility_is_the_root_sum_of_squared_returns():
 
 # --- 5.4 volume surprise -----------------------------------------------------
 
-def test_volume_surprise_is_log_turnover_against_its_twenty_day_mean():
+def test_volume_surprise_is_log_lagged_turnover_against_its_twenty_day_mean():
     df = frame()
-    df.loc[TARGET, "volume"] *= 2
+    df.loc[TARGET - 1, "volume"] *= 2
     assert abs(factor(df, "vs_20")[TARGET] - np.log(2)) < 1e-12
 
 
@@ -103,7 +103,7 @@ def test_volume_surprise_survives_a_share_split():
 
 def test_volume_surprise_is_missing_when_the_stock_did_not_trade():
     df = frame()
-    df.loc[TARGET, "volume"] = 0
+    df.loc[TARGET - 1, "volume"] = 0
     assert pd.isna(factor(df, "vs_20")[TARGET])
 
 
@@ -134,9 +134,11 @@ def test_drawdown_measures_the_fall_from_the_one_year_peak():
     df["ret"] = 0.0
     df.loc[300, "ret"] = -0.10
     values = factor(df, "dd_252")
-    assert abs(values[299] - 0.0) < 1e-12         # sitting at the peak
+    assert abs(values[300] - 0.0) < 1e-12         # as at t-1, still at the peak
+    assert abs(values[301] - -0.10) < 1e-12       # the fall is visible one day on
     assert abs(values[TARGET] - -0.10) < 1e-12
-    assert pd.isna(values[250])                   # window not yet complete
+    assert pd.isna(values[251])                   # window not yet complete
+    assert not pd.isna(values[252])
 
 
 def test_drawdown_is_measured_on_returns_not_on_the_unadjusted_price():
@@ -150,10 +152,13 @@ def test_drawdown_is_measured_on_returns_not_on_the_unadjusted_price():
 
 # --- shared leakage guarantee ------------------------------------------------
 
-def test_no_factor_reads_a_row_after_t():
+def test_no_factor_reads_a_row_at_or_after_t():
+    """Every factor must be determined by the close of t-1. The target runs from
+    the close of t, so a factor needing t's own close could only be executed at
+    that same close."""
     df = frame()
     perturbed = df.copy()
-    after = perturbed.index > TARGET
+    after = perturbed.index >= TARGET
     perturbed.loc[after, "ret"] *= -3
     perturbed.loc[after, "value_weighted_market_return"] *= -2
     perturbed.loc[after, ["volume", "shares_outstanding"]] *= 9
