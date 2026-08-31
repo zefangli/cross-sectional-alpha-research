@@ -62,8 +62,14 @@ in `experiments.csv` before final-test evaluation.
 - Begin with rank/proportional long-short weights and position caps.
 - Evaluate Pearson IC, Spearman rank IC, coverage, turnover, gross/net return,
   Sharpe, drawdown, and cost sensitivity.
-- Evaluate each result at **1, 5, 10, and 20 bps** per unit of turnover. The
-  exact turnover convention will be stated with portfolio results.
+- Evaluate each result at **1, 5, 10, and 20 bps**. Turnover convention:
+  `TO_t = 0.5 * sum_i |w_it - w_i,t-1|` on a book with weights summing to
+  +1 long and -1 short (gross leverage 2), so a full rotation is `TO = 2`
+  and traded notional is `2 * TO`. Costs are charged on traded notional:
+  `R_net = R_gross - 2 * c * TO`.
+- Single-factor evaluation stops at the last date whose 20-day target
+  window ends on or before 2023-12-31, so the sealed 2024-2025 period is
+  never read through a forward return.
 
 ## Eligibility and data checks
 

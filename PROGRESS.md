@@ -19,6 +19,22 @@
 - Delisting-return limitation documented: this export has no explicit
   delisting-return field, so incomplete post-exit target windows are censored.
 
+- Week 2 vertical slice: reusable single-factor evaluation harness
+  (`src/features/factors.py`, `src/evaluation/factor_eval.py`) plus the first
+  factor, medium-term momentum `mom_120_20`.
+- Evaluation is sealed at the target window, not the observation date: the last
+  evaluated date is 2023-11-30, so no 2024 return enters any statistic.
+- Momentum result over 2006-2023: mean rank IC -0.00002 (Newey-West t = 0.00),
+  non-monotonic decile returns, ~90% turnover per 20-day rebalance, gross
+  Sharpe 0.188, net Sharpe 0.088 at 10 bp and -0.011 at 20 bp, breakeven ~19 bp.
+  Logged as W2-001 and written up in `reports/factor_memo_01_momentum.md`.
+- Factor tests cover the known-value window, the skipped recent month, future
+  perturbation, history gaps, turnover with position exits, and Newey-West.
+
 ## Next
 
-- Week 2: implement and evaluate the six locked single-factor signals.
+- Apply the same harness to reversal, realised volatility, volume surprise,
+  residual momentum and drawdown by adding entries to `FACTOR_SQL` /
+  `FACTOR_SIGN`; nothing in the evaluation changes.
+- Extend the first factor memo into the combined Week 2 factor-research memo
+  once all six results exist.
