@@ -8,11 +8,22 @@ momentum/volatility cluster; that is the mechanism by which either could beat
 the composite's 0.147 gross Sharpe bar.
 
 Every model is fit on TRAIN rows only (aligned, date <= fold.train_end, target
-not null) and scored on a PREDICT block that starts `WARMUP_DAYS` trading days
-before validation_start -- exactly the fold's own purge gap -- so the 20
-staggered daily cohorts a downstream backtest would form are already fully
-ramped on the first scored validation day. Warm-up rows are flagged
-`is_validation = False` and are never part of TRAIN.
+not null) and scored on a PREDICT block that is validation dates only:
+fold.validation_start through fold.validation_end, capped at COHORT_LAST. An
+earlier version of this module also emitted a `WARMUP_DAYS`-long block
+immediately before validation_start, meant to pre-ramp a downstream
+staggered-cohort book before its first scored day. That block was look-ahead
+contaminated: TRAIN runs through fold.train_end, and rows dated
+train_end + 1 .. train_end + WARMUP_DAYS -- exactly the warm-up window --
+carry 20-day forward targets that mature during the warm-up itself, so the
+model fit on TRAIN had already seen returns realised after any warm-up
+formation date. A cohort formed in that window would trade on look-ahead
+even though prediction metrics scored on validation rows were unaffected.
+The downstream backtest instead gets its ramp for free: it is one continuous
+2014-2023 run, so cohorts formed in December under one fold's model simply
+run off into January under the next fold's, the same as a live system that
+swaps models annually would behave. `is_validation` is kept for schema
+compatibility and is now always True.
 
 Gradient boosting uses HistGradientBoostingRegressor, not LightGBM: LightGBM
 is not installed and won't be added for one model, and this is the same
@@ -111,12 +122,12 @@ fit_predict.last_alpha = None
 
 
 def fold_frames(con, scan: str, fold) -> tuple:
-    """TRAIN rows up to the purge gap, plus the warmed-up PREDICT block.
+    """TRAIN rows up to the purge gap, plus the validation-only PREDICT block.
 
-    PREDICT starts `WARMUP_DAYS` trading days before validation_start -- the
-    fold's own purge gap -- and stops at fold.validation_end capped at
-    COHORT_LAST. Rows before validation_start are warm-up: never trained on,
-    flagged `is_validation = False`.
+    PREDICT is fold.validation_start through fold.validation_end, capped at
+    COHORT_LAST. `is_validation` is kept for schema compatibility and is
+    always True -- see the module docstring for why no warm-up block precedes
+    it.
     """
     select = ", ".join(f"CAST({c} AS FLOAT) AS {c}" for c in FEATURES)
     train = con.sql(f"""
@@ -130,11 +141,10 @@ def fold_frames(con, scan: str, fold) -> tuple:
         SELECT permno, date, tdi, {select}
         FROM {scan}
         WHERE aligned
-          AND tdi >= (SELECT tdi FROM {scan} WHERE date = DATE '{fold.validation_start}'
-                      LIMIT 1) - {WARMUP_DAYS}
+          AND date >= DATE '{fold.validation_start}'
           AND date <= DATE '{validation_end.date()}'
     """).df()
-    predict_frame["is_validation"] = predict_frame.date >= pd.Timestamp(fold.validation_start)
+    predict_frame["is_validation"] = True
     return train, predict_frame
 
 

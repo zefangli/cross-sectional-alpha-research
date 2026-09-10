@@ -99,28 +99,44 @@
 - No point-prediction skill (W4-001): out-of-sample R2 is negative for all three
   models against the training-period mean. The edge is entirely in ordering --
   rank IC 0.0220 for OLS (NW t 8.82), 0.0197 for GBM (t 7.74).
-- No model beats the pre-registered composite (W4-002). Composite gross Sharpe
-  0.333 and breakeven 25.0 bp; best model book `gbm__decile` 0.174 and 10.5 bp;
-  OLS and Ridge are net-negative at 10 bp. The models trade more for less: OLS
-  earns 0.74% gross on a 0.70 book at 6.8x annual turnover against the
-  composite's 2.81% on a 0.90 book at 5.6x.
+- No model beats the pre-registered composite (W4-002, recomputed under W4-005).
+  Composite gross Sharpe 0.297 and breakeven 22.2 bp; best model book
+  `gbm__decile` 0.099 and 5.9 bp. Only the two composite books are net-positive
+  at 10 bp; every model book is negative there. The models trade more for less:
+  OLS earns 0.45% gross on a 0.70 book at 6.8x annual turnover against the
+  composite's 2.50% on a 0.90 book at 5.6x.
 - The Week 3 bar was stale (W4-003). Recomputing the composite on the same
-  2014-2023 validation dates moves it from 0.121 to 0.333 gross Sharpe and from
-  8.7 bp to 25.0 bp breakeven; the recomputation matches the Week 3 daily series
-  to 1e-16, so it is a window effect, not a code change.
+  2014-2023 validation dates moves it from 0.121 to 0.297 gross Sharpe and from
+  8.7 bp to 22.2 bp breakeven; the recomputation matches the Week 3 daily series
+  exactly outside the ramp days, so it is a window effect, not a code change.
+- Warm-up contamination found and corrected (W4-005). The first version
+  pre-ramped each fold's book on the 20 trading days before its validation year,
+  which is exactly the window in which the training rows' 20-day targets are
+  realised, so those cohorts traded on look-ahead. Predictions and cohorts are
+  now validation-only and the ten folds run as one continuous backtest with
+  cohorts carrying across annual model changes. Model books fell 31-43% of gross
+  Sharpe, the composite 11% -- the asymmetry the mechanism predicts, since the
+  composite depends on no fitted model. This also fixed an unintended per-fold
+  cohort reset that truncated year-end tail P&L. Prediction IC and R2 are
+  unaffected.
+- Portfolio inference is now Newey-West HAC at 20 lags (W4-006), since the
+  staggered cohorts induce serial dependence. The correction is mild, within
+  0.07 of the naive statistic everywhere.
 - Nothing in the study is statistically distinguishable from zero. Every book
-  has |t| <= 1.06 on its gross Sharpe over 9.9 years, and the 2006-2013 versus
-  2014-2023 difference has t = 0.92. Week 4 compared a null against three other
-  nulls; the composite lost least.
+  has a HAC |t| <= 1.01 on its gross Sharpe over ten years, the models sit at
+  0.26-0.32, and the 2006-2013 versus 2014-2023 difference has t = 0.85. Week 4
+  compared a null against three other nulls; the composite lost least.
 - Ridge alpha is unidentified under MSE selection (W4-004): the inner search
   returned the grid maximum in all ten folds, MSE keeps falling out to alpha
   1e10 for a 0.005% total gain, yet predictions at 1e4 and 1e10 correlate only
   0.86 by daily cross-sectional rank because ridge rotates coefficients rather
   than scaling them. MSE is the wrong criterion for a ranking problem. The
-  pre-registered grid is kept rather than retuned after the fact.
+  pre-registered grid is kept and Ridge is not retuned; rank-IC selection moves
+  to Week 5 as a separate, declared, training-only robustness experiment.
 - The models independently learned a negative loading on `mom_120_20`, against
   its pre-registered sign, matching Week 2's direct finding.
-- Written up in `reports/week4_model_memo.md`. 39 tests pass.
+- Written up in `reports/week4_model_memo.md`. 40 tests pass, including a
+  named regression test for the warm-up bug.
 
 ## Next
 
@@ -130,7 +146,8 @@
   that exposure is removed, none of these Sharpes can be called alpha.
 - Select any Week 5 hyperparameter on rank IC inside the training fold, declared
   in advance. W4-004 showed MSE cannot do the job on this target.
-- The same-period bar is a gross Sharpe of 0.333 and a 25 bp breakeven from the
-  rank-weighted composite over 2014-2023, carrying t = 1.05 and therefore to be
-  treated as an estimate that could be zero.
+- The same-period bar is a gross Sharpe of 0.297 and a 22.2 bp breakeven from
+  the rank-weighted composite over 2014-2023, carrying a HAC t of 1.01 and
+  therefore to be treated as an estimate that could be zero.
+- Report portfolio inference with HAC t-statistics from here on.
 - 2024-2025 stays sealed until Week 6.

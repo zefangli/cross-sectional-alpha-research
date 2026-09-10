@@ -1,35 +1,49 @@
 """Week 4: OLS, Ridge and gradient boosting evaluated against the Week 3 baseline.
 
 Consumes `data/processed/week4_predictions.parquet` (built by
-`src/models/walk_forward.py`) and does two things with it: measures raw
-prediction quality against `forward_return_20d`, and forms portfolios through
-the unmodified Week 3 backtest (`src/portfolio/backtest.py`).
+`src/models/walk_forward.py`), which carries validation-only rows: cohorts are
+formed on validation dates alone, never on a warm-up block preceding them. An
+earlier version of this module formed cohorts on a 20-trading-day warm-up
+block appended before each fold's validation year so its book would already
+be ramped by the fold's first scored day. That block was look-ahead
+contaminated -- the model trains through `train_end`, and the warm-up rows'
+20-day targets mature during the warm-up window itself -- see
+`walk_forward.py`'s module docstring for the full argument. All ten folds
+carried a contaminated stretch.
+
+The fix is one continuous run instead of ten fold-scoped ones. A given model's
+predictions, taken across all ten folds, are already a single non-overlapping
+2014-01-02..2023-11-30 series (each date's row supplied by that year's fold
+model), so `book_frame` just filters and ranks them -- no per-fold looping or
+warm-up block needed. Cohorts are formed once, over the whole span, and marked
+through one `daily_book` call, so a cohort formed in December under fold k's
+model runs off naturally into January under fold k+1's, exactly as a live
+system that swaps models annually would behave. There is exactly one ramp-up,
+at the very start of 2014, common to every book, so it cannot bias the
+comparison between them.
+
+The Week 3 equal-weighted signed-rank composite is recomputed through this
+identical machinery -- same continuous span, same single ramp, same
+`capped_neutral_weights` call, same decile threshold -- so the comparison
+against the fitted models is apples-to-apples on 2014-2023 only. The Week 3
+memo's 2006-2023 headline (gross Sharpe 0.121 rank / 0.147 decile) is a
+different, longer sample and is not the comparison bar here.
 
 OOS R^2 is benchmarked against the TRAINING-period mean target, not the
 validation mean. The validation mean would leak the validation period's own
 realised average return into the "no-skill" prediction, inflating R^2 for any
 model that predicts close to a constant.
 
-Portfolio mechanics, per fold: the signal frame is that fold's rows in the
-predictions parquet, warm-up (`is_validation=False`) included. Cohorts are
-formed on every date in that frame, so the 20 staggered cohorts are already
-fully ramped by the fold's first validation day -- this requires calling
-`daily_book` with `first_date` set to the warm-up start, not the validation
-start, because its rolling 20-day weight window can only sum over dates
-present in its own date-filtered grid. The returned daily frame is then
-truncated to [validation_start, validation_end] before use, which is what
-actually keeps P&L marking confined to the validation window and the ten
-per-fold frames non-overlapping when concatenated.
+The 20-day staggered cohorts induce strong serial correlation in the daily
+return series, so `Sharpe * sqrt(years)` only approximates significance. Every
+book's `summarize` also reports a Newey-West/HAC t-statistic on the mean daily
+gross return at `OVERLAP_LAG` (20) lags, next to that naive figure, so the gap
+between them is visible.
 
-The Week 3 equal-weighted signed-rank composite is recomputed through this
-identical per-fold machinery -- same fold dates, same warm-up, same
-`capped_neutral_weights` call, same decile threshold -- so the comparison
-against the fitted models is apples-to-apples on 2014-2023 only. The Week 3
-memo's 2006-2023 headline (gross Sharpe 0.121 rank / 0.147 decile) is a
-different, longer sample and is not the comparison bar here.
-
-2024-2025 stays sealed: every fold's dates are capped at COHORT_LAST, imported
-from `walk_forward.py` so the two modules can never disagree about the cutoff.
+2024-2025 stays sealed: cohort formation stops at COHORT_LAST, imported from
+`walk_forward.py` so the two modules can never disagree about the cutoff; P&L
+is marked through PNL_LAST, which is what lets the last cohorts formed before
+COHORT_LAST finish their 20-day hold.
 """
 from pathlib import Path
 import sys
@@ -43,7 +57,7 @@ from src.evaluation.factor_eval import newey_west_tstat, OVERLAP_LAG
 from src.evaluation.week3_baseline import COMPOSITE
 from src.features.factors import ALL_FACTORS, FACTOR_SIGN
 from src.models.splits import walk_forward_splits
-from src.models.walk_forward import COHORT_LAST, MODELS, PREDICTIONS, TARGET, WARMUP_DAYS
+from src.models.walk_forward import COHORT_LAST, MODELS, PREDICTIONS, TARGET
 from src.portfolio.backtest import (CAP, COSTS_BPS, TRADING_DAYS,
                                      capped_neutral_weights, daily_book, performance_daily)
 
@@ -122,41 +136,38 @@ def prediction_quality(con, scan: str, predictions: pd.DataFrame, splits: pd.Dat
     return fold_metrics, model_metrics
 
 
-def composite_frame(con, scan: str, fold) -> pd.DataFrame:
-    """This fold's (permno, date, tdi, rank_<factor>) rows, warm-up included.
+def composite_frame(con, scan: str, first_date: str) -> pd.DataFrame:
+    """(permno, date, tdi, rank_<factor>) rows over the full validation span.
 
-    Mirrors the tdi arithmetic `walk_forward.fold_frames` uses for its PREDICT
-    block -- same WARMUP_DAYS constant, same validation window -- without
-    paying for that function's TRAIN query, which this composite never needs.
+    Same [first_date, COHORT_LAST] window the fitted models' predictions cover,
+    so the composite is formed on exactly the same dates as every other book.
     """
     columns = ", ".join(f"rank_{f}" for f in ALL_FACTORS)
-    validation_end = min(pd.Timestamp(fold.validation_end), pd.Timestamp(COHORT_LAST))
     return con.sql(f"""
         SELECT permno, date, tdi, {columns}
         FROM {scan}
-        WHERE aligned
-          AND tdi >= (SELECT tdi FROM {scan} WHERE date = DATE '{fold.validation_start}'
-                      LIMIT 1) - {WARMUP_DAYS}
-          AND date <= DATE '{validation_end.date()}'
+        WHERE aligned AND date >= DATE '{first_date}' AND date <= DATE '{COHORT_LAST}'
         ORDER BY tdi
     """).df()
 
 
-def book_frame(con, scan: str, fold, name: str, predictions: pd.DataFrame) -> pd.DataFrame:
-    """This fold's signal frame for `name`, with both a `rank` and a `decile` column.
+def book_frame(con, scan: str, name: str, predictions: pd.DataFrame, first_date: str) -> pd.DataFrame:
+    """The single continuous 2014-2023 signal frame for `name`, ranked and decile-bucketed.
 
     `rank` is the equal-weighted signed-rank composite itself for the Week 3
     baseline (unchanged from `week3_baseline.py`, so that book is a faithful
     recomputation), or the cross-sectional percentile rank of `prediction` for
-    a fitted model. `decile` is a further per-date percentile-rank-and-threshold
-    of `rank`, identical code for both: a no-op re-rank for the models, and the
-    same construction `week3_baseline.py` used for `decile_composite`.
+    a fitted model -- pooled across all ten folds, which is already one
+    non-overlapping series since the folds' validation years don't overlap.
+    `decile` is a further per-date percentile-rank-and-threshold of `rank`,
+    identical code for both: a no-op re-rank for the models, and the same
+    construction `week3_baseline.py` used for `decile_composite`.
     """
     if name == COMPOSITE:
-        frame = composite_frame(con, scan, fold)
+        frame = composite_frame(con, scan, first_date)
         frame["rank"] = sum(FACTOR_SIGN[f] * frame[f"rank_{f}"] for f in ALL_FACTORS) / len(ALL_FACTORS)
     else:
-        frame = predictions.loc[(predictions.fold == fold.fold) & (predictions.model == name),
+        frame = predictions.loc[predictions.model == name,
                                  ["permno", "date", "tdi", "prediction"]].copy()
         frame["rank"] = frame.groupby("date")["prediction"].rank(pct=True)
     pct = frame.groupby("date")["rank"].rank(pct=True)
@@ -164,16 +175,22 @@ def book_frame(con, scan: str, fold, name: str, predictions: pd.DataFrame) -> pd
     return frame
 
 
-def fold_book(con, scan: str, fold, frame: pd.DataFrame, weighting: str) -> pd.DataFrame:
-    """Form cohorts over the whole fold frame, mark P&L only inside the validation window."""
+def book(con, scan: str, frame: pd.DataFrame, weighting: str, first_date: str, last_date: str) -> pd.DataFrame:
+    """Form cohorts on every date in `frame`, hold 20 days, mark P&L in one continuous call.
+
+    One `daily_book` call over the whole span, rather than one per fold, is
+    what lets a cohort formed in December under fold k's model run off
+    naturally into January under fold k+1's: the rolling 20-day weight window
+    inside `daily_book` sums over the full span, not a fold's own truncated
+    slice. `last_date` runs past COHORT_LAST to PNL_LAST so the cohorts formed
+    just before the cutoff still finish their hold.
+    """
     cohort = frame[["permno", "tdi", "date"]].copy()
     cohort["w"] = capped_neutral_weights(frame, weighting)
     con.register("cohort", cohort[["permno", "tdi", "w"]])
-    warmup_start = str(frame.date.min().date())
-    validation_end = str(min(pd.Timestamp(fold.validation_end), pd.Timestamp(COHORT_LAST)).date())
-    daily = daily_book(con, scan, warmup_start, validation_end, factors=ALL_FACTORS)
+    daily = daily_book(con, scan, first_date, last_date, factors=ALL_FACTORS)
     con.unregister("cohort")
-    return daily[daily.date >= pd.Timestamp(fold.validation_start)]
+    return daily
 
 
 def summarize(daily: pd.DataFrame) -> dict:
@@ -195,6 +212,12 @@ def summarize(daily: pd.DataFrame) -> dict:
     for column in ["gross_return"] + [f"net_return_{b}bp" for b in COSTS_BPS]:
         for key, value in performance_daily(daily[column], daily.market_return).items():
             summary[f"{column}_{key}"] = value
+    # The 20-day staggered cohorts induce daily serial correlation, so the
+    # naive `Sharpe * sqrt(years)` overstates significance; report the
+    # Newey-West t-stat at the same 20-lag horizon alongside it.
+    years = len(daily) / TRADING_DAYS
+    summary["gross_return_naive_tstat"] = summary["gross_return_sharpe"] * np.sqrt(years)
+    summary["gross_return_hac_tstat"] = newey_west_tstat(daily.gross_return, OVERLAP_LAG)
     for factor in ALL_FACTORS:
         summary[f"exposure_{factor}"] = daily[f"exposure_{factor}"].mean()
     return summary
@@ -269,9 +292,13 @@ def main() -> None:
 
     predictions = pd.read_parquet(PREDICTIONS)
     assert predictions.date.max() <= pd.Timestamp(COHORT_LAST), "prediction past the sealed period"
+    assert predictions.is_validation.all(), "expected validation-only predictions, no warm-up rows"
 
     dates = con.sql(f"SELECT DISTINCT date FROM {scan} WHERE aligned ORDER BY date").df().date
     splits = walk_forward_splits(dates, last_evaluable=COHORT_LAST)
+    first_date = str(splits.validation_start.min())
+    assert predictions.date.min() == pd.Timestamp(first_date), \
+        "predictions still carry a warm-up block before the first validation date"
 
     # 1. Prediction quality on validation rows only.
     fold_metrics, model_metrics = prediction_quality(con, scan, predictions, splits)
@@ -283,25 +310,30 @@ def main() -> None:
     print("Pooled model metrics:\n", model_metrics.round(4).to_string(index=False), "\n")
 
     # 2. Portfolios: three fitted models plus the recomputed Week 3 composite,
-    # each under rank and decile weighting, through the identical fold machinery.
+    # each under rank and decile weighting, as ONE continuous 2014-2023 run.
     books = {}
     for name in NAMES:
-        frames = {int(f.fold): book_frame(con, scan, f, name, predictions) for f in splits.itertuples()}
+        frame = book_frame(con, scan, name, predictions, first_date)
+        assert not frame.duplicated(["permno", "date"]).any(), \
+            f"{name}: duplicate (permno, date) rows across folds"
+        assert frame.date.max() <= pd.Timestamp(COHORT_LAST), f"{name}: cohort formed past 2023-11-30"
         for weighting in ("rank", "decile"):
             label = name if weighting == "rank" else f"{name}__decile"
-            parts = [fold_book(con, scan, f, frames[int(f.fold)], weighting) for f in splits.itertuples()]
-            daily = pd.concat(parts, ignore_index=True).sort_values("date").reset_index(drop=True)
+            daily = book(con, scan, frame, weighting, first_date, PNL_LAST)
             assert daily.date.is_monotonic_increasing, f"{label}: dates out of order"
-            assert not daily.date.duplicated().any(), f"{label}: duplicate dates across fold boundaries"
+            assert not daily.date.duplicated().any(), f"{label}: duplicate dates"
             assert daily.date.max() <= pd.Timestamp(PNL_LAST), f"{label}: P&L marked past 2023"
             books[label] = daily
             daily.to_csv(OUT / f"daily_{label}.csv", index=False)
             print(f"{label:18s} days {len(daily):5d}  "
                   f"{daily.date.min().date()} -> {daily.date.max().date()}", flush=True)
 
-    n_days = len(next(iter(books.values())))
-    assert all(len(daily) == n_days for daily in books.values()), "books disagree on day count"
-    assert 2400 <= n_days <= 2600, f"unexpected out-of-sample day count: {n_days}"
+    reference_dates = next(iter(books.values())).date.reset_index(drop=True)
+    for label, daily in books.items():
+        assert (daily.date.reset_index(drop=True) == reference_dates).all(), \
+            f"{label}: date index differs from the other books"
+    n_days = len(reference_dates)
+    assert 2400 <= n_days <= 2650, f"unexpected out-of-sample day count: {n_days}"
 
     summary = pd.concat([pd.Series(summarize(daily), name=label)
                          for label, daily in books.items()], axis=1)
@@ -310,6 +342,8 @@ def main() -> None:
     comparison = pd.DataFrame([{
         "book": label,
         "gross_sharpe": summary.loc["gross_return_sharpe", label],
+        "gross_naive_tstat": summary.loc["gross_return_naive_tstat", label],
+        "gross_hac_tstat": summary.loc["gross_return_hac_tstat", label],
         "net_sharpe_10bp": summary.loc["net_return_10bp_sharpe", label],
         "breakeven_bp": summary.loc["breakeven_bp", label],
         "annual_turnover": summary.loc["annual_turnover_multiple", label],

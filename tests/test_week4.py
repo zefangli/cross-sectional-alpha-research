@@ -47,9 +47,9 @@ def test_training_rows_strictly_precede_every_validation_period():
         assert train.date.max() < predict.loc[predict.is_validation, "date"].min()
 
 
-# --- fold_frames: purge and cohort warm-up ------------------------------------
+# --- fold_frames: purge and validation-only predict block ---------------------
 
-def test_predict_block_starts_exactly_warmup_days_after_train_end_and_never_leaks_into_train():
+def test_predict_block_starts_exactly_at_validation_start_with_no_warmup():
     dates = pd.bdate_range("2020-01-01", "2021-12-31")
     frame = panel(dates)
     con = duckdb.connect()
@@ -63,17 +63,37 @@ def test_predict_block_starts_exactly_warmup_days_after_train_end_and_never_leak
 
     assert val_start_tdi - train_end_tdi == 21                # the fold's own purge gap
     assert train.tdi.max() == train_end_tdi                   # train reaches its boundary exactly
-    assert predict.tdi.min() == val_start_tdi - WARMUP_DAYS    # predict starts exactly there...
-    assert predict.tdi.min() == train_end_tdi + 1              # ...the very next trading day
 
-    warmup = predict[~predict.is_validation]
-    assert len(warmup) > 0
-    assert (warmup.date < pd.Timestamp(fold.validation_start)).all()          # flagged correctly
-    validated = predict.loc[predict.is_validation, "date"]
-    assert (validated >= pd.Timestamp(fold.validation_start)).all()
+    # No warm-up block: predict starts exactly at validation_start, not before.
+    assert predict.date.min() == pd.Timestamp(fold.validation_start)
+    assert (predict.date >= pd.Timestamp(fold.validation_start)).all()
+    assert predict.is_validation.all()                        # every predicted row is validation
 
-    leaked = pd.merge(train[["permno", "date"]], warmup[["permno", "date"]])
-    assert leaked.empty                                        # no warm-up row ever in TRAIN
+    leaked = pd.merge(train[["permno", "date"]], predict[["permno", "date"]])
+    assert leaked.empty                                        # no predict row ever in TRAIN
+
+
+def test_regression_no_predicted_row_falls_inside_train_end_forward_target_window():
+    """Regression test for the warm-up look-ahead bug: a PREDICT row dated
+    within WARMUP_DAYS trading days of train_end carries a formation date
+    whose 20-day forward target matures during training, since TRAIN rows as
+    late as train_end already have targets realised on those dates. The
+    earliest predicted date must therefore be strictly after
+    train_end + WARMUP_DAYS trading days -- i.e. validation_start, one day
+    past the purge gap.
+    """
+    dates = pd.bdate_range("2020-01-01", "2021-12-31")
+    frame = panel(dates)
+    con = duckdb.connect()
+    con.register("panel", frame)
+    fold = walk_forward_splits(dates, first_validation_year=2021, last_validation_year=2021).iloc[0]
+    _, predict = fold_frames(con, "panel", fold)
+
+    tdi_of = dict(zip(frame.date, frame.tdi))
+    train_end_tdi = tdi_of[pd.Timestamp(fold.train_end)]
+
+    assert predict.tdi.min() > train_end_tdi + WARMUP_DAYS
+    assert predict.tdi.min() == train_end_tdi + WARMUP_DAYS + 1
 
 
 # --- fold_frames: the sealed period -------------------------------------------
