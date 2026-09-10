@@ -19,3 +19,4 @@ __pycache__/
 .env
 .DS_Store
 Thumbs.db
+data/week4_run*.log

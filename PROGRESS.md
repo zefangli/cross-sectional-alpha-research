@@ -85,11 +85,52 @@
   Week 4 baseline regardless, and both are carried forward.
 - 32 tests pass.
 
+## Week 4
+
+- Walk-forward model layer built (`src/models/walk_forward.py`): OLS, Ridge and
+  gradient boosting fitted independently inside each of the ten Week 3 folds,
+  over the six factor ranks, with a 20-day warm-up block so the staggered
+  cohorts are fully ramped on each fold's first scored day. Gradient boosting is
+  sklearn's `HistGradientBoostingRegressor`; LightGBM was not installed and was
+  not added for one model.
+- 13.9M predictions written, none dated after 2023-11-30. Preprocessing is
+  inside an sklearn Pipeline and the ridge alpha search runs on a purged inner
+  chronological split of the training dates only.
+- No point-prediction skill (W4-001): out-of-sample R2 is negative for all three
+  models against the training-period mean. The edge is entirely in ordering --
+  rank IC 0.0220 for OLS (NW t 8.82), 0.0197 for GBM (t 7.74).
+- No model beats the pre-registered composite (W4-002). Composite gross Sharpe
+  0.333 and breakeven 25.0 bp; best model book `gbm__decile` 0.174 and 10.5 bp;
+  OLS and Ridge are net-negative at 10 bp. The models trade more for less: OLS
+  earns 0.74% gross on a 0.70 book at 6.8x annual turnover against the
+  composite's 2.81% on a 0.90 book at 5.6x.
+- The Week 3 bar was stale (W4-003). Recomputing the composite on the same
+  2014-2023 validation dates moves it from 0.121 to 0.333 gross Sharpe and from
+  8.7 bp to 25.0 bp breakeven; the recomputation matches the Week 3 daily series
+  to 1e-16, so it is a window effect, not a code change.
+- Nothing in the study is statistically distinguishable from zero. Every book
+  has |t| <= 1.06 on its gross Sharpe over 9.9 years, and the 2006-2013 versus
+  2014-2023 difference has t = 0.92. Week 4 compared a null against three other
+  nulls; the composite lost least.
+- Ridge alpha is unidentified under MSE selection (W4-004): the inner search
+  returned the grid maximum in all ten folds, MSE keeps falling out to alpha
+  1e10 for a 0.005% total gain, yet predictions at 1e4 and 1e10 correlate only
+  0.86 by daily cross-sectional rank because ridge rotates coefficients rather
+  than scaling them. MSE is the wrong criterion for a ranking problem. The
+  pre-registered grid is kept rather than retuned after the fact.
+- The models independently learned a negative loading on `mom_120_20`, against
+  its pre-registered sign, matching Week 2's direct finding.
+- Written up in `reports/week4_model_memo.md`. 39 tests pass.
+
 ## Next
 
-- Week 4: OLS sanity check, Ridge, and gradient boosting over the ten fixed
-  folds, compared on IC, rank IC and net portfolio results through the existing
-  backtest. The bar is a gross Sharpe of 0.147 and a 10.1 bp breakeven.
-- Expect any gain to come from weighting `rev_5` and `vs_20` above an equal
-  composite, since they are the only signals independent of the main cluster.
+- Week 5: neutralise beta, sector and size. Every model concentrates on the same
+  correlated momentum/volatility/drawdown cluster Week 3 identified, and every
+  book carries a persistent short market position (beta -0.14 to -0.27). Until
+  that exposure is removed, none of these Sharpes can be called alpha.
+- Select any Week 5 hyperparameter on rank IC inside the training fold, declared
+  in advance. W4-004 showed MSE cannot do the job on this target.
+- The same-period bar is a gross Sharpe of 0.333 and a 25 bp breakeven from the
+  rank-weighted composite over 2014-2023, carrying t = 1.05 and therefore to be
+  treated as an estimate that could be zero.
 - 2024-2025 stays sealed until Week 6.
