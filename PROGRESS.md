@@ -175,16 +175,43 @@
   horizons {5,10,20,40} gross Sharpe moves only 0.297-0.383 while breakeven
   swings 10.4 to 38.5 bp -- the project's headline breakeven is fragile to an
   arbitrary holding-period choice.
-- Final specification locked (W5-006) by the rule declared in advance: max net
-  Sharpe at 10 bp subject to realised beta within 0.10 of zero, applied to all
-  28 candidate books. Only 8 pass the beta constraint and all 8 are neutralised.
-  Locked `composite__decile__neutral`: beta -0.057, gross Sharpe 0.486 (HAC t
-  1.53), net Sharpe at 10 bp +0.209. Recorded in
-  `reports/week5/locked_specification.json`.
-- The lock is a procedural commitment, not a claim of edge. HAC t 1.53 is about
-  p = 0.13, the highest the Weeks 3-5 program has produced and still not
-  significant.
-- Written up in `reports/week5_neutralisation_memo.md`. 51 tests pass.
+- The first candidate grid was incomplete and the lock has been corrected
+  (W5-007). The rule varies weighting, neutralisation and factor set, but only
+  raw ablations were ever evaluated, and since every raw ablation fails the beta
+  constraint, factor set could not compete. All 12 neutralised ablations pass
+  it. The grid went from 28 candidates with 8 admissible to 40 with 20, and the
+  winner changed.
+- Final specification locked by the unchanged W5-006 rule, applied
+  programmatically by `src/evaluation/week5_lock.py` to
+  `reports/week5/candidates.csv`: **`drop_rmom_120_20__neutral__decile`** --
+  the five-factor composite dropping `rmom_120_20`, neutralised, decile
+  weighted. Realised beta -0.056, gross Sharpe 0.534 (HAC t 1.65), net Sharpe at
+  10 bp +0.238. The dropped factor is the one W5-004R had already flagged as the
+  redundant half of the momentum pair.
+- The lock is a procedural commitment, not a claim of edge, and three things cut
+  against it: completing the grid made the selection statistically weaker, since
+  the winner is now the max of 20 correlated admissible estimates rather than 8;
+  the margin over the runner-up is 0.0103 with the top four books spanning
+  0.209-0.238; and the runner-up has the higher HAC t (1.97 against 1.65),
+  because the rule selects on net Sharpe, not significance, as pre-registered.
+  HAC t 1.65 is about p = 0.10 and is still not significant.
+- The Week 6 protocol is executable and frozen (W5-008). `week6_final.py` reads
+  the lock at runtime, hardcodes no book, and refuses on a missing field, a
+  factor sign disagreeing with `FACTOR_SIGN`, a recorded commit that is not an
+  ancestor of HEAD, or an uncommitted `src/` on the sealed path. Reaching the
+  sealed period requires the literal string
+  `run-sealed-2024-2025-exactly-once`; no argument exits before any data is
+  opened. Its `replay` mode reproduces the locked book's Week 5 figures to about
+  1e-15.
+- **The sealed period is outcome-sealed but was not literally untouched**
+  (W5-009). Exposures are built over full panel history because a t-1 rolling
+  beta needs it, and the first exposure audit summarised coverage and sector
+  counts over 2024-2025 covariate rows. No return, target or performance figure
+  from the sealed period was ever computed. The winsorisation quantiles came
+  from a beta range measured on a query restricted to dates through 2023-11-30.
+  The audit now ends at 2023-11-30, and this is disclosed rather than described
+  as an untouched seal.
+- Written up in `reports/week5_neutralisation_memo.md`. 66 tests pass.
 
 ## Next
 

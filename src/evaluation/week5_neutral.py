@@ -98,6 +98,19 @@ def residualize(frame: pd.DataFrame) -> np.ndarray:
     return residual
 
 
+def formation_exposures(con, exp_scan: str, scan: str, first_date: str) -> pd.DataFrame:
+    """Sector/`beta_252`/`log_mcap` over the formation window [first_date, COHORT_LAST],
+    winsorised per date -- the exposures every `neutralise` call regresses against."""
+    exposures = con.sql(f"""
+        SELECT exp.permno, exp.date, exp.tdi, exp.sector, exp.beta_252, exp.log_mcap
+        FROM {exp_scan} exp JOIN {scan} fp USING (permno, date, tdi)
+        WHERE fp.aligned AND fp.date >= DATE '{first_date}' AND fp.date <= DATE '{COHORT_LAST}'
+    """).df()
+    exposures["beta_252_w"] = exposures.groupby("date")["beta_252"].transform(winsorize)
+    exposures["log_mcap_w"] = exposures.groupby("date")["log_mcap"].transform(winsorize)
+    return exposures
+
+
 def neutralise(score_frame: pd.DataFrame, exposures: pd.DataFrame) -> pd.DataFrame:
     """Residualise `score_frame.score` against the three exposures, then
     cross-sectionally rank the residual into the same (rank, decile) shape
@@ -296,13 +309,7 @@ def main() -> None:
     con.execute(f"CREATE TABLE merged_panel AS {merged_scan_query(scan, exp_scan, PNL_LAST)}")
     print(f"merged_panel: {con.sql('SELECT COUNT(*) FROM merged_panel').fetchone()[0]:,} rows\n", flush=True)
 
-    exposures = con.sql(f"""
-        SELECT exp.permno, exp.date, exp.tdi, exp.sector, exp.beta_252, exp.log_mcap
-        FROM {exp_scan} exp JOIN {scan} fp USING (permno, date, tdi)
-        WHERE fp.aligned AND fp.date >= DATE '{first_date}' AND fp.date <= DATE '{COHORT_LAST}'
-    """).df()
-    exposures["beta_252_w"] = exposures.groupby("date")["beta_252"].transform(winsorize)
-    exposures["log_mcap_w"] = exposures.groupby("date")["log_mcap"].transform(winsorize)
+    exposures = formation_exposures(con, exp_scan, scan, first_date)
 
     daily, summaries = {}, []
     for name in NAMES:

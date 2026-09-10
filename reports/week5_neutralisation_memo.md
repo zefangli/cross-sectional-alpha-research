@@ -185,46 +185,113 @@ horizon is recommended.
 
 ## 6. The locked specification (W5-006)
 
-Rule, fixed in advance: maximise net Sharpe at 10 bp subject to realised market
-beta within 0.10 of zero. Applied mechanically to all 28 candidate books from
-Weeks 3 to 5 -- raw, neutralised, and every ablated variant.
+### 6a. The first candidate grid was incomplete
 
-**Only 8 of 28 pass the beta constraint, and all 8 are neutralised.** Three raw
-ablated composites had competitive net Sharpe (+0.183, +0.183, +0.174) and were
-disqualified on beta alone, which is exactly what the constraint was written to
-do.
+The rule varies three things: weighting, neutralisation and factor set. The
+first grid contained the cross of weighting and neutralisation for the full
+six-factor set, plus *raw* leave-one-out ablations -- but never the 12
+**neutralised** ablations. Since every raw ablation fails the beta constraint,
+factor set was nominally a free dimension and in practice could not compete.
 
-**Locked: `composite__decile__neutral`.**
+Closing the gap changed the answer. All 12 neutralised ablations pass
+|beta| <= 0.10, where no raw ablation did. The grid went from 28 candidates
+with 8 admissible to **40 candidates with 20 admissible**, and the winner moved.
+
+### 6b. The lock
+
+Rule, unchanged from its pre-registration: maximise net Sharpe at 10 bp subject
+to realised market beta within 0.10 of zero, applied mechanically by
+`src/evaluation/week5_lock.py` to the candidate table in
+`reports/week5/candidates.csv`.
+
+| book | beta | net@10bp | gross SR | HAC t |
+|---|---|---|---|---|
+| **`drop_rmom_120_20__neutral__decile`** | -0.056 | **+0.238** | 0.534 | 1.65 |
+| `drop_dd_252__neutral__decile` | -0.029 | +0.228 | 0.617 | **1.97** |
+| `drop_vs_20__neutral__decile` | -0.062 | +0.221 | 0.460 | 1.46 |
+| `composite__neutral__decile` (previous lock) | -0.057 | +0.209 | 0.486 | 1.53 |
+
+**Locked: `drop_rmom_120_20__neutral__decile`.**
 
 | property | value |
 |---|---|
-| factors | all six, equal-weighted signed ranks |
-| neutralisation | sector, `beta_252`, `log_mcap`, cross-sectional, per date |
+| factors | five: `mom_120_20` +1, `rev_5` +1, `rvol_20` -1, `vs_20` +1, `dd_252` +1 |
+| dropped | `rmom_120_20` |
+| neutralisation | sector dummies (10 of 11, `sector_0` dropped), winsorised `beta_252` and `log_mcap`, per date, `lstsq` |
 | weighting | tail decile, +1/0/-1 |
 | holding period | 20 trading days, staggered daily cohorts |
 | construction | dollar-neutral, 1% position cap |
-| realised beta | -0.057 |
-| gross Sharpe | 0.486 (HAC t 1.53) |
-| net Sharpe at 10 bp | +0.209 |
+| realised beta | -0.056 |
+| gross Sharpe | 0.534 (HAC t 1.65) |
+| net Sharpe at 10 bp | +0.238 |
 
-Recorded in `reports/week5/locked_specification.json`.
+The dropped factor is the one W5-004R had already identified as the redundant
+half of the momentum pair, on raw evidence, before this grid existed. That is
+mild corroboration, not confirmation.
 
-**This lock is a procedural commitment, not a claim of edge.** A HAC `t` of 1.53
-is a two-sided p of about 0.13. It is the highest figure the whole Weeks 3-5
-program has produced -- the previous ceiling was 1.01 -- and it is still not
-significant. Its own mean rank IC roughly halved under neutralisation, 0.0354 to
-0.0133. The specification is locked so that Week 6 is a genuine test rather than
-a search, and the honest prior going in is that the final result will be
-indistinguishable from zero.
+### 6c. Three reasons to hold this loosely
+
+**Closing the governance gap made the statistical claim weaker, not stronger.**
+The winner is now the maximum of 20 correlated admissible estimates rather than
+8. Fixing the grid was right, and it enlarges the selection problem. Both are
+true, and no multiple-testing correction is applied to the winner.
+
+**The margin is inside the noise.** The winner beats the runner-up by 0.0103 of
+net Sharpe, and the top four books span 0.209 to 0.238. Which one "wins" is
+effectively arbitrary.
+
+**The rule does not select the most significant book.** The runner-up has the
+higher HAC `t` (1.97 against 1.65). The rule selects on net Sharpe subject to
+beta, exactly as pre-registered, and it was not changed to chase significance --
+but the outcome plainly depends on a criterion fixed in advance for reasons
+unrelated to which book would win.
+
+**This lock is a procedural commitment, not a claim of edge.** A HAC `t` of 1.65
+is a two-sided p of about 0.10. It is the highest the Weeks 3-5 program has
+produced and it is still not significant. The specification is locked so that
+Week 6 is a genuine test rather than a search, and the honest prior going in is
+that the final result will be indistinguishable from zero.
+
+### 6d. The final-test protocol is executable and frozen
+
+`src/evaluation/week6_final.py` reads the lock file at runtime and hardcodes
+nothing about which book won. It refuses to run if a required field is missing,
+if a factor's sign disagrees with the pre-registered `FACTOR_SIGN`, if the
+recorded commit is not an ancestor of HEAD, or -- on the sealed path only -- if
+`src/` has uncommitted changes. Reaching the sealed period requires typing the
+literal string `run-sealed-2024-2025-exactly-once`; there is no default path to
+it, and no argument at all exits before any data is opened.
+
+A `replay` mode runs the identical code path over 2014-2023 and reproduces all
+five recorded Week 5 figures for the locked book to about 1e-15
+(`reports/week6/replay_validation.csv`). The frozen protocol -- formation start,
+ramp convention, cohort cutoff, P&L end, cost tiers, and the exact metric list
+-- is written to `reports/week6/replay_protocol.json`.
+
+Note on provenance: the recorded commit must be an *ancestor* of HEAD, not equal
+to it. Equality is unsatisfiable, because the lock file lives in the repository,
+so the commit containing it necessarily differs from the hash recorded inside
+it. Ancestry plus a clean `src/` is the property actually wanted.
 
 ## 7. Limitations
 
 - Everything in Weeks 3-5 remains statistically indistinguishable from zero. The
   locked book's HAC `t` of 1.53 is the best in the program and does not clear
   conventional significance.
-- The selection rule ran over 28 candidate books. Even with the rule declared in
-  advance, the winner is the maximum of 8 admissible correlated estimates, and
-  no multiple-testing correction is applied to it.
+- The selection rule ran over 40 candidate books. Even with the rule declared in
+  advance, the winner is the maximum of 20 admissible correlated estimates, and
+  no multiple-testing correction is applied to it. Completing the grid was
+  necessary for the rule to mean what it said, and it widened this problem.
+- **The sealed period is outcome-sealed but was not literally untouched.**
+  Exposures are built over the full panel history, because a t-1 rolling beta
+  needs its history, and the first version of the exposure audit summarised
+  coverage and sector counts over that full history -- including 2024-2025
+  covariate rows. No return, target or performance figure from the sealed period
+  was ever computed or displayed. The winsorisation quantiles were chosen from a
+  beta range measured on a query restricted to dates through 2023-11-30, not
+  from that full-history summary. The audit has since been restricted to end at
+  2023-11-30, but the earlier full-history summary did exist, and this is
+  disclosed rather than described as an untouched seal.
 - Sector is point-in-time in structure, but this export cannot confirm that a
   reclassification was recorded when publicly known rather than at its effective
   date.

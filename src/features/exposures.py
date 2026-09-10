@@ -144,21 +144,35 @@ def exposures_query(panel_source: str, sic_source: str) -> str:
 
 
 def _write_summary(con) -> None:
-    exp = f"parquet_scan('{OUT.as_posix()}/**/*.parquet')"
+    """Audit the exposures, over the research window only.
+
+    Exposures are *built* over the full panel history because a t-1 rolling
+    beta needs its history and because they are inputs, not results. But
+    summarising them over the full history would put 2024-2025 covariate
+    distributions in front of the researcher, and a distribution seen is a
+    distribution that can influence a modelling choice -- winsorisation
+    quantiles being the obvious one. Every statistic below therefore stops at
+    LAST_RESEARCH_DATE, so the sealed period is untouched in the audit as well
+    as in the evaluation.
+    """
+    exp = (f"(SELECT * FROM parquet_scan('{OUT.as_posix()}/**/*.parquet')"
+           f" WHERE date <= DATE '{LAST_RESEARCH_DATE}')")
     fp = f"parquet_scan('{FACTOR_PANEL.as_posix()}')"     # already ends in /**/*.parquet
     con.execute(f"""
         CREATE VIEW joined AS
         SELECT fp.date, exp.sector, exp.beta_252, exp.log_mcap
-        FROM (SELECT permno, date, tdi FROM {fp} WHERE aligned) fp
+        FROM (SELECT permno, date, tdi FROM {fp}
+              WHERE aligned AND date <= DATE '{LAST_RESEARCH_DATE}') fp
         LEFT JOIN {exp} exp USING (permno, date, tdi)
     """)
     con.execute(f"""
         COPY (
             SELECT 'note' AS metric,
-                'exposures are built over the full panel history through the '
-                'last available date because they are inputs, not results; '
-                'research use of factors/models/exposures must still stop at '
-                '{LAST_RESEARCH_DATE} per the Week 2/3 seal' AS value
+                'exposures are built over the full panel history because a t-1 '
+                'rolling beta needs its history, but every statistic in this '
+                'file is restricted to dates <= {LAST_RESEARCH_DATE} so no '
+                'sealed-period covariate distribution is reported' AS value
+            UNION ALL SELECT 'summary_window_end', '{LAST_RESEARCH_DATE}'
             UNION ALL SELECT 'exposure_rows', COUNT(*)::VARCHAR FROM {exp}
             UNION ALL SELECT 'aligned_factor_panel_rows', COUNT(*)::VARCHAR FROM joined
             UNION ALL SELECT 'sector_coverage_share_of_aligned',

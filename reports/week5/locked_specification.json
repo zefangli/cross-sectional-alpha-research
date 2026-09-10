@@ -1,16 +1,58 @@
 {
-  "locked_book": "composite__decile__neutral",
+  "locked_book": "drop_rmom_120_20__neutral__decile",
   "rule": "max net Sharpe at 10bp subject to |realised market beta| <= 0.10",
+  "candidates": 40,
+  "passing_beta_constraint": 20,
+  "declared_in": "W5-006",
+  "locked_on": "2026-09-10",
+  "git_commit": "7bb90a360750179a45f3152ec723d82c89a9ed89",
+  "factor_set": "drop_rmom_120_20",
+  "factors": [
+    {
+      "name": "mom_120_20",
+      "sign": 1
+    },
+    {
+      "name": "rev_5",
+      "sign": 1
+    },
+    {
+      "name": "rvol_20",
+      "sign": -1
+    },
+    {
+      "name": "vs_20",
+      "sign": 1
+    },
+    {
+      "name": "dd_252",
+      "sign": 1
+    }
+  ],
   "weighting": "decile",
-  "neutralised": true,
-  "factor_set": "all six",
   "hold_days": 20,
   "cap": 0.01,
-  "realised_beta": -0.0566,
-  "net_sharpe_10bp": 0.2087,
-  "gross_sharpe": 0.4857,
-  "candidates": 28,
-  "passing_beta_constraint": 8,
-  "declared_in": "W5-006",
-  "locked_on": "2026-09-10"
+  "neutralised": true,
+  "neutralisation": {
+    "regressors": [
+      "sector dummies (10 of 11 SIC divisions; sector_0 dropped)",
+      "beta_252 (cross-sectionally winsorised)",
+      "log_mcap (cross-sectionally winsorised)"
+    ],
+    "winsorise_quantiles": [
+      0.01,
+      0.99
+    ],
+    "solver": "np.linalg.lstsq (rank-tolerant, per date)"
+  },
+  "realised_beta": -0.0561869593400945,
+  "net_sharpe_10bp": 0.2378579479526869,
+  "gross_sharpe": 0.5336777402676277,
+  "gross_hac_t": 1.6480320084891966,
+  "max_drawdown": -0.1776868824614259,
+  "runner_up": {
+    "book": "drop_dd_252__neutral__decile",
+    "net_sharpe_10bp": 0.2275902463777446,
+    "margin": 0.010267701574942278
+  }
 }
