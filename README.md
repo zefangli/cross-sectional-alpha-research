@@ -52,11 +52,16 @@ writes the eligible-universe/20-trading-day-target panel to
 
 The remaining stages build the aligned six-factor rank panel, evaluate each
 factor on its own, build the Week 3 baseline portfolio, fit the walk-forward
-models, and score them. Their outputs land under `reports/`. Nothing in the
-pipeline reads a date after 2023-11-30; the 2024-2025 final test is opened once,
-in Week 6.
+models, and score them. Their outputs land under `reports/`.
 
-Run the checks with `python -m pytest -q` (39 tests, a few seconds; they use
+Model fitting, prediction and portfolio cohort formation all stop on 2023-11-30.
+Portfolio P&L is then marked through 2023-12-29, which reads December 2023
+returns in order to run off the cohorts formed up to the cutoff -- a position
+opened on 2023-11-30 is held for twenty trading days and has to be marked to the
+end of that holding period. No 2024 or 2025 observation is read by any stage;
+the final test is opened once, in Week 6.
+
+Run the checks with `python -m pytest -q` (40 tests, a few seconds; they use
 synthetic frames and do not need the built panel).
 
 ## Project layout

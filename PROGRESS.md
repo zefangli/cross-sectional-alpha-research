@@ -89,13 +89,18 @@
 
 - Walk-forward model layer built (`src/models/walk_forward.py`): OLS, Ridge and
   gradient boosting fitted independently inside each of the ten Week 3 folds,
-  over the six factor ranks, with a 20-day warm-up block so the staggered
-  cohorts are fully ramped on each fold's first scored day. Gradient boosting is
-  sklearn's `HistGradientBoostingRegressor`; LightGBM was not installed and was
-  not added for one model.
-- 13.9M predictions written, none dated after 2023-11-30. Preprocessing is
-  inside an sklearn Pipeline and the ridge alpha search runs on a purged inner
+  over the six factor ranks. Gradient boosting is sklearn's
+  `HistGradientBoostingRegressor`; LightGBM was not installed and was not added
+  for one model.
+- 12,879,195 validation-only predictions written (4,293,065 per model), dated
+  2014-01-02 to 2023-11-30, with no warm-up rows. The books get their single
+  ramp from one continuous 2014-2023 backtest rather than a per-fold warm-up;
+  see W4-005 below for why the warm-up was withdrawn. Preprocessing is inside an
+  sklearn Pipeline and the ridge alpha search runs on a purged inner
   chronological split of the training dates only.
+- Windows to keep distinct: fitting, prediction and cohort formation all stop on
+  2023-11-30; portfolio P&L is marked through 2023-12-29 to run off the cohorts
+  formed up to that date. No 2024 or 2025 observation is read either way.
 - No point-prediction skill (W4-001): out-of-sample R2 is negative for all three
   models against the training-period mean. The edge is entirely in ordering --
   rank IC 0.0220 for OLS (NW t 8.82), 0.0197 for GBM (t 7.74).
@@ -138,16 +143,55 @@
 - Written up in `reports/week4_model_memo.md`. 40 tests pass, including a
   named regression test for the warm-up bug.
 
+## Week 5
+
+- CRSP `SICCD` audited and confirmed point-in-time (W5-001): it rides on the
+  SecInfo interval records and 12,079 of 21,548 PERMNOs carry more than one code
+  over time. Two traps avoided -- the `SecurityHdrFlg='Y'` row matches the first
+  interval more often than the last (7,420 against 3,137) so it is never used,
+  and 9.8% of interval rows carry sentinel codes clustering on delisting stubs,
+  for which the prior interval is carried forward and a later one never is.
+- Point-in-time exposures built (W5-002): sector, `beta_252` and `log_mcap`, all
+  determined at the close of t-1, 100% coverage on the aligned panel. Complete
+  coverage is structural, since Week 1 eligibility already requires the 252
+  prior returns the beta window needs.
+- Neutralisation FAILS its pre-declared test in 7 of 8 books (W5-003). Every
+  book sheds 75-98% of realised market beta, so that leg passes everywhere; net
+  Sharpe at 10 bp gets worse, so the second leg fails. Only `composite__decile`
+  passes both.
+- The mechanism is the week's most useful finding: neutralisation halves
+  annualised volatility (8.43% to 4.12%) while turnover and dollar cost drag
+  stay flat (5.64x to 5.72x, 1.13% to 1.14%). A fixed trading cost charged
+  against half the risk budget doubles its bite in Sharpe terms. It cannot be
+  levered away, since net Sharpe is leverage-invariant. On gross Sharpe alone
+  `ols` and `ridge` nearly tripled and this would have been recorded as a win.
+- Ablation (W5-004): `rmom_120_20` and `vs_20` are redundant by the pre-declared
+  rule, `mom_120_20` and `rev_5` are not, `rvol_20`/`dd_252` are inconclusive.
+  Every ablated book sits at HAC |t| 0.81-1.29, so nothing is dropped.
+- Robustness (W5-005): the low-volatility tercile (HAC t 2.43) and calendar 2018
+  (2.21) are best-of-many ex-post slices of a series whose full-sample t is 1.0,
+  and the tercile boundaries are full-sample quantiles, so that split is not
+  even implementable. Neither is treated as a finding. Across pre-declared
+  horizons {5,10,20,40} gross Sharpe moves only 0.297-0.383 while breakeven
+  swings 10.4 to 38.5 bp -- the project's headline breakeven is fragile to an
+  arbitrary holding-period choice.
+- Final specification locked (W5-006) by the rule declared in advance: max net
+  Sharpe at 10 bp subject to realised beta within 0.10 of zero, applied to all
+  28 candidate books. Only 8 pass the beta constraint and all 8 are neutralised.
+  Locked `composite__decile__neutral`: beta -0.057, gross Sharpe 0.486 (HAC t
+  1.53), net Sharpe at 10 bp +0.209. Recorded in
+  `reports/week5/locked_specification.json`.
+- The lock is a procedural commitment, not a claim of edge. HAC t 1.53 is about
+  p = 0.13, the highest the Weeks 3-5 program has produced and still not
+  significant.
+- Written up in `reports/week5_neutralisation_memo.md`. 51 tests pass.
+
 ## Next
 
-- Week 5: neutralise beta, sector and size. Every model concentrates on the same
-  correlated momentum/volatility/drawdown cluster Week 3 identified, and every
-  book carries a persistent short market position (beta -0.14 to -0.27). Until
-  that exposure is removed, none of these Sharpes can be called alpha.
-- Select any Week 5 hyperparameter on rank IC inside the training fold, declared
-  in advance. W4-004 showed MSE cannot do the job on this target.
-- The same-period bar is a gross Sharpe of 0.297 and a 22.2 bp breakeven from
-  the rank-weighted composite over 2014-2023, carrying a HAC t of 1.01 and
-  therefore to be treated as an estimate that could be zero.
-- Report portfolio inference with HAC t-statistics from here on.
-- 2024-2025 stays sealed until Week 6.
+- Week 6: open 2024-2025 exactly once, run the locked specification unchanged,
+  and report the result whatever it is. No re-selection, no re-tuning, no second
+  look.
+- The honest prior going in: everything in Weeks 3-5 was indistinguishable from
+  zero, so the expected final result is indistinguishable from zero. A positive
+  result is one draw from a distribution centred near zero; a negative one is
+  the project's finding and will be reported as such.

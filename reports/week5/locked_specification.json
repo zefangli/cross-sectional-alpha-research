@@ -1,0 +1,16 @@
+{
+  "locked_book": "composite__decile__neutral",
+  "rule": "max net Sharpe at 10bp subject to |realised market beta| <= 0.10",
+  "weighting": "decile",
+  "neutralised": true,
+  "factor_set": "all six",
+  "hold_days": 20,
+  "cap": 0.01,
+  "realised_beta": -0.0566,
+  "net_sharpe_10bp": 0.2087,
+  "gross_sharpe": 0.4857,
+  "candidates": 28,
+  "passing_beta_constraint": 8,
+  "declared_in": "W5-006",
+  "locked_on": "2026-09-10"
+}

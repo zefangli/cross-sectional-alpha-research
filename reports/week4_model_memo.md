@@ -1,7 +1,18 @@
 # Week 4: Walk-forward model comparison
 
-Date: 2026-09-10. Experiments: W4-001 .. W4-006.
-Validation window: 2014-01-03 to 2023-12-29, ten fixed folds. 2024-2025 sealed.
+Date: 2026-09-10. Experiments: W4-001 .. W4-006. Ten fixed folds.
+
+Two windows, kept distinct throughout:
+
+- **Prediction and cohort formation**: 2014-01-02 to 2023-11-30. Model fitting
+  stops here too. This is the window every IC, R2 and MSE in section 3 is
+  scored on.
+- **Portfolio P&L**: 2014-01-03 to 2023-12-29, 2,515 trading days. It runs one
+  day later at the start because a cohort formed at the close of 2014-01-02
+  first accrues on 2014-01-03, and nineteen days later at the end because the
+  cohort formed on 2023-11-30 must be held its full twenty trading days.
+
+2024-2025 sealed; no stage reads it.
 
 > **Revision, 2026-09-10 (W4-005, W4-006).** The first version of this memo
 > pre-ramped each fold's book on a 20-trading-day warm-up block before its
