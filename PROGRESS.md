@@ -229,12 +229,41 @@
   as an untouched seal.
 - Written up in `reports/week5_neutralisation_memo.md`. 71 tests pass.
 
+## Week 6 -- the sealed final test
+
+- The sealed period was opened exactly once, on 2026-09-11, at commit `084f5eb`,
+  running the specification locked at `fbbe574` unchanged. An atomic
+  `sealed_run_started.json` marker records the run and prevents repetition.
+- Formation 2024-01-02 to 2025-12-02, P&L 2024-01-03 to 2025-12-31, 501 trading
+  days, rank IC on the 482 formation dates.
+- **Result (W6-001): gross Sharpe 1.522 with a HAC t of 2.76; net Sharpe 1.491,
+  1.368, 1.215 and 0.909 at 1, 5, 10 and 20 bp; breakeven 49.7 bp; realised
+  market beta -0.065; max drawdown -4.1%; annual turnover 8.86x; mean rank IC
+  0.0364 with a HAC t of 4.63.** Profitable at every cost tier tested, and beta
+  stayed inside the selection rule's 0.10 constraint out of sample, which it had
+  no obligation to do.
+- The result is NOT significantly better than the in-sample estimate (W6-002).
+  Out-of-sample 1.522 against in-sample 0.534 is a difference of +0.99 with a
+  standard error near 1.10, so t is about 0.90. An approximate 95% interval on
+  the out-of-sample Sharpe runs about -0.5 to 3.6: the mean return is
+  distinguishable from zero, while its magnitude is barely pinned down.
+- Both calendar years are positive (2024 Sharpe 1.39, HAC t 1.73; 2025 Sharpe
+  1.65, HAC t 2.22), recorded descriptively with neither preferred. Two adjacent
+  years of one market are consistency, not two experiments.
+- The dropped factor is still an exposure: mean `rmom_120_20` exposure is 0.248
+  despite its exclusion, because the five retained factors correlate with it.
+  The largest exposures remain `mom_120_20` (0.443) and `dd_252` (0.355) -- the
+  Week 3 cluster, never fully defused.
+- Written up in `reports/week6_final_memo.md`. 71 tests pass.
+
 ## Next
 
-- Week 6: open 2024-2025 exactly once, run the locked specification unchanged,
-  and report the result whatever it is. No re-selection, no re-tuning, no second
-  look.
-- The honest prior going in: everything in Weeks 3-5 was indistinguishable from
-  zero, so the expected final result is indistinguishable from zero. A positive
-  result is one draw from a distribution centred near zero; a negative one is
-  the project's finding and will be reported as such.
+- Nothing. The specification is locked, the sealed period is spent, and this
+  test is not repeatable on this data.
+- The honest summary of the project: Weeks 2 through 5 found essentially nothing
+  distinguishable from zero, and one pre-registered specification then survived a
+  fair two-year out-of-sample test. That is a weak signal that passed a real
+  test once, not an established edge.
+- What would change the conclusion is more out-of-sample time, not more analysis
+  of 2024-2025. Any further work on this dataset is in-sample by construction and
+  must be labelled as such.

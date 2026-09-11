@@ -18,8 +18,16 @@ signs, and every book in the study -- models and baseline alike -- has a gross
 Sharpe within about one standard error of zero. This is reported as it stands
 rather than searched away.
 
-Weeks 5-6 remain: risk neutralisation, then a single pass over the sealed
-2024-2025 final test. No 2024 or 2025 observation has been evaluated.
+Week 5 neutralised the books against point-in-time sector, beta and size, and
+locked one specification by a rule declared in advance. Week 6 opened the sealed
+2024-2025 period exactly once and ran it unchanged: gross Sharpe 1.52 (HAC
+t 2.76), net Sharpe 1.22 at 10 bp, realised market beta -0.065.
+
+That result is real and was obtained under genuine out-of-sample conditions. It
+is also two years long, imprecisely estimated, statistically indistinguishable
+from the much weaker in-sample figure, and produced by a specification chosen as
+the best of twenty admissible candidates. See `reports/week6_final_memo.md`.
+The specification stays locked; the test is not repeatable on this data.
 
 ## Setup
 

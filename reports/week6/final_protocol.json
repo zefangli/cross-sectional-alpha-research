@@ -1,0 +1,107 @@
+{
+  "sealed": true,
+  "formation_start": "2024-01-02",
+  "cohort_formation_cutoff": "2025-12-02",
+  "pnl_end_date": "2025-12-31",
+  "ramp_convention": "one ramp at formation_start; one continuous daily_book call over the full span, matching Weeks 4-5",
+  "cost_bps": [
+    1,
+    5,
+    10,
+    20
+  ],
+  "neutralisation_controls": [
+    "sector",
+    "beta_252",
+    "log_mcap"
+  ],
+  "metrics": [
+    "mean_rank_ic",
+    "rank_ic_hac_t",
+    "gross_return_sharpe",
+    "gross_return_hac_t",
+    "net_return_1bp_sharpe",
+    "net_return_5bp_sharpe",
+    "net_return_10bp_sharpe",
+    "net_return_20bp_sharpe",
+    "gross_return_annualised_return",
+    "gross_return_annualised_volatility",
+    "breakeven_bp",
+    "annual_turnover",
+    "gross_return_market_beta",
+    "mean_gross_exposure",
+    "mean_net_exposure",
+    "gross_return_max_drawdown",
+    "exposure_mom_120_20",
+    "exposure_rev_5",
+    "exposure_rvol_20",
+    "exposure_vs_20",
+    "exposure_rmom_120_20",
+    "exposure_dd_252",
+    "exposure_beta_252",
+    "exposure_log_mcap",
+    "exposure_sector"
+  ],
+  "metric_coverage": {
+    "rank_ic_dates": 482,
+    "portfolio_dates": 501
+  },
+  "spec": {
+    "locked_book": "drop_rmom_120_20__neutral__decile",
+    "rule": "max net Sharpe at 10bp subject to |realised market beta| <= 0.10",
+    "candidates": 40,
+    "passing_beta_constraint": 20,
+    "declared_in": "W5-006",
+    "locked_on": "2026-09-10",
+    "git_commit": "fbbe574a2e7ed0d9c8eb1870a67546caa949f349",
+    "factor_set": "drop_rmom_120_20",
+    "factors": [
+      {
+        "name": "mom_120_20",
+        "sign": 1
+      },
+      {
+        "name": "rev_5",
+        "sign": 1
+      },
+      {
+        "name": "rvol_20",
+        "sign": -1
+      },
+      {
+        "name": "vs_20",
+        "sign": 1
+      },
+      {
+        "name": "dd_252",
+        "sign": 1
+      }
+    ],
+    "weighting": "decile",
+    "hold_days": 20,
+    "cap": 0.01,
+    "neutralised": true,
+    "neutralisation": {
+      "regressors": [
+        "sector dummies (10 of 11 SIC divisions; sector_0 dropped)",
+        "beta_252 (cross-sectionally winsorised)",
+        "log_mcap (cross-sectionally winsorised)"
+      ],
+      "winsorise_quantiles": [
+        0.01,
+        0.99
+      ],
+      "solver": "np.linalg.lstsq (rank-tolerant, per date)"
+    },
+    "realised_beta": -0.0561869593400945,
+    "net_sharpe_10bp": 0.2378579479526869,
+    "gross_sharpe": 0.5336777402676277,
+    "gross_hac_t": 1.6480320084891966,
+    "max_drawdown": -0.1776868824614259,
+    "runner_up": {
+      "book": "drop_dd_252__neutral__decile",
+      "net_sharpe_10bp": 0.2275902463777446,
+      "margin": 0.010267701574942278
+    }
+  }
+}
