@@ -339,14 +339,18 @@ def run_locked_book(con, scan: str, exp_scan: str, spec: dict, first_date: str,
     `week4_models`/`week5_neutral` draw between COHORT_LAST and PNL_LAST.
     Returns (daily, summary, metric_coverage).
 
-    `forward_return_20d` is null for the last `hold_days` or so formation
-    dates of any window that runs to the end of the panel (there is no future
-    20-day return to compute yet), so `daily_rank_ic` legitimately has no
-    entry, or a NaN correlation, for some of those dates -- fewer than the
-    portfolio P&L, which only needs realised daily returns. Dropping those
-    NaNs explicitly (rather than relying on `Series.mean`'s default skipna)
-    and recording both date counts is what turns a silent, unnoticed gap into
-    a documented one.
+    The two metric families are therefore measured over different date sets,
+    and `metric_coverage` records both. Rank IC is measured on FORMATION dates,
+    [first_date, cohort_last]. Portfolio metrics span P&L dates, which run
+    `hold_days` further to let the final cohorts finish their hold. On replay
+    that is 2,496 formation dates against 2,515 P&L dates: the 19-day
+    difference is the holding tail, not missing data. Because cohort formation
+    already stops `hold_days` before `pnl_last`, every permitted formation date
+    has a realised target -- the last aligned date carrying one is exactly the
+    cutoff. NaNs are still dropped explicitly rather than left to
+    `Series.mean`'s default skipna, so a genuinely absent correlation (an
+    undefined cross-section on some date) can never pass silently into a
+    headline number.
     """
     con.execute(f"CREATE OR REPLACE TABLE merged_panel AS {merged_scan_query(scan, exp_scan, pnl_last)}")
     frame = score_frame(con, scan, exp_scan, spec, first_date, cohort_last)
