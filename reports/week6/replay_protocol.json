@@ -42,6 +42,10 @@
     "exposure_log_mcap",
     "exposure_sector"
   ],
+  "metric_coverage": {
+    "rank_ic_dates": 2496,
+    "portfolio_dates": 2515
+  },
   "spec": {
     "locked_book": "drop_rmom_120_20__neutral__decile",
     "rule": "max net Sharpe at 10bp subject to |realised market beta| <= 0.10",

@@ -1,10 +1,15 @@
+from pathlib import Path
+import tempfile
+
 import duckdb
 import numpy as np
 import pandas as pd
 import pytest
 
-from src.evaluation.week6_final import (REPLAY_PNL_LAST, main, neutral_exposures,
-                                        resolve_factors, resolve_name, score_frame, validate_spec)
+from src.evaluation.week6_final import (ROOT, REPLAY_PNL_LAST, cohort_cutoff, main, neutral_exposures,
+                                        require_clean_source, require_frozen_runner, resolve_factors,
+                                        resolve_name, score_frame, sealed_formation_start,
+                                        start_sealed_run, validate_spec)
 from src.features.factors import ALL_FACTORS, FACTOR_SIGN
 from src.portfolio.backtest import capped_neutral_weights
 
@@ -147,3 +152,52 @@ def test_neutralised_score_correlates_less_with_beta_than_the_raw_score_does():
             lambda g: abs(np.corrcoef(g["rank"], g["beta_252_w"])[0, 1])).mean()
 
     assert mean_abs_corr(neutral) < mean_abs_corr(raw)
+
+
+# --- the four one-shot-final-test defects -------------------------------------
+
+def test_sealed_formation_start_is_the_first_2024_trading_date_not_2014():
+    con = duckdb.connect()
+    dates = pd.bdate_range("2023-12-15", "2024-01-10")
+    con.register("scan", pd.DataFrame({"date": dates, "tdi": range(len(dates)), "aligned": True}))
+    assert sealed_formation_start(con, "scan") == "2024-01-01"
+
+
+def test_cohort_cutoff_is_hold_days_trading_days_before_pnl_end_crossing_a_weekend():
+    con = duckdb.connect()
+    dates = pd.bdate_range("2024-01-01", periods=10)  # Mon 1 Jan .. Fri 12 Jan, skipping one weekend
+    con.register("scan", pd.DataFrame({"date": dates, "tdi": range(len(dates)), "aligned": True}))
+    pnl_last = str(dates[-1].date())
+    naive_cutoff = str((dates[-1] - pd.Timedelta(days=5)).date())
+    assert naive_cutoff not in set(dates.strftime("%Y-%m-%d"))  # a naive calendar-date pick lands on a Sunday
+    assert cohort_cutoff(con, "scan", pnl_last, hold_days=5) == "2024-01-05"
+
+
+def test_a_second_sealed_invocation_is_refused_because_the_marker_exists():
+    with tempfile.TemporaryDirectory() as tmp:
+        out_dir = Path(tmp)
+        start_sealed_run(out_dir, "deadbeef")
+        with pytest.raises(RuntimeError):
+            start_sealed_run(out_dir, "deadbeef")
+
+
+def test_a_lock_json_modified_after_the_recorded_commit_is_refused():
+    """Stands in for `reports/week5/locked_specification.json` picking up
+    uncommitted edits: an untracked scratch file trips the same
+    `git status --porcelain` mechanism `require_clean_source` points at that
+    real, currently-committed file, without ever touching it."""
+    scratch = ROOT / "reports" / "week6" / "_prov_test_scratch.tmp"
+    scratch.write_text("uncommitted")
+    try:
+        with pytest.raises(ValueError):
+            require_clean_source(paths=(str(scratch.relative_to(ROOT).as_posix()),))
+    finally:
+        scratch.unlink()
+
+
+def test_provenance_requires_the_recorded_commit_to_contain_the_exact_runner_being_executed():
+    """The real Week 5 lock's recorded commit predates this runner module
+    entirely, so `git show` can't find it there -- provenance must refuse
+    rather than silently skip the check."""
+    with pytest.raises(ValueError):
+        require_frozen_runner("7bb90a360750179a45f3152ec723d82c89a9ed89")

@@ -14,9 +14,11 @@ process regenerates that JSON from the full candidate grid and the winning
 book can change (it did, mid-development of this module: the lock moved from
 the full six-factor composite to `drop_rmom_120_20`). If the JSON is missing a
 field this module needs, its recorded git commit is not an ancestor of the current
-HEAD, or a factor's recorded sign disagrees with the pre-registered sign in
-`factors.py`, the run refuses outright: a silent default at this point would
-defeat six weeks of governance.
+HEAD, `src/` or the lock file itself carries uncommitted changes, this file's own
+content at that recorded commit does not match what is actually executing, or a
+factor's recorded sign disagrees with the pre-registered sign in `factors.py`,
+the run refuses outright: a silent default at this point would defeat six
+weeks of governance.
 
 This module supports composite-family winners only (raw or neutralised, full
 six factors or an ablated subset, rank or decile weighted). A fitted-model
@@ -33,8 +35,10 @@ tight tolerance -- proof the runner executes the frozen specification
 correctly, using only pre-2024 data. Only the literal `SEAL_MODE` string opens
 2024-2025, and only once that run is deliberately made.
 """
+from datetime import datetime, timezone
 from pathlib import Path
 import json
+import os
 import subprocess
 import sys
 
@@ -43,7 +47,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import numpy as np
 import pandas as pd
 
-from src.evaluation.week4_models import COHORT_LAST as REPLAY_COHORT_LAST
 from src.evaluation.week5_neutral import (EXPOSURE_FACTORS, daily_rank_ic, merged_scan_query,
                                           neutralise as neutralise_score, summarize as week5_summarize,
                                           winsorize)
@@ -63,11 +66,17 @@ REPLAY_MODE = "replay"
 SEAL_MODE = "run-sealed-2024-2025-exactly-once"
 
 REPLAY_PNL_LAST = "2023-12-29"
-# Formation cutoff and P&L end for the sealed run: the same "stop 20 trading
-# days before year end, mark P&L to year end" convention COHORT_LAST/PNL_LAST
-# already use for 2023, applied to the last year the sealed period covers.
-SEALED_COHORT_LAST = "2025-11-30"
+# P&L end for the sealed run: the same "mark P&L to year end" convention
+# PNL_LAST already uses for 2023, applied to the last year the sealed period
+# covers. The formation cutoff is NOT a hardcoded calendar date -- see
+# `cohort_cutoff` -- because "2025-11-30" is a Sunday and a naive calendar
+# cutoff silently drops the last two cohorts.
 SEALED_PNL_LAST = "2025-12-31"
+
+FROZEN_PATHS = ("src", SPEC_PATH.relative_to(ROOT).as_posix())
+RUNNER_PATH = Path(__file__).resolve().relative_to(ROOT).as_posix()
+FINAL_ARTIFACT_NAMES = ("final_result.csv", "final_daily.csv", "final_protocol.json")
+MARKER_NAME = "sealed_run_started.json"
 
 REQUIRED_FIELDS = ("git_commit", "locked_book", "weighting", "neutralised",
                    "factor_set", "factors", "hold_days", "cap")
@@ -122,19 +131,78 @@ def check_provenance(recorded: str, head_commit: str) -> None:
                 f"does not descend from")
 
 
-def require_clean_source() -> None:
-    """Refuse the sealed run if `src/` has uncommitted changes.
+def require_clean_source(paths: tuple = FROZEN_PATHS) -> None:
+    """Refuse the sealed run if `src/` OR the locked specification itself has
+    uncommitted changes.
 
-    Ancestry alone cannot catch the staleness that matters most -- code edited
-    but never committed. This is checked only on the sealed path: a replay or a
-    unit test may legitimately run from a dirty tree, the one-shot final test
-    may not.
+    Ancestry alone cannot catch the staleness that matters most -- code (or
+    the lock file) edited but never committed. The lock file lives outside
+    `src/`, so a `src/`-only check misses it entirely: `SPEC_PATH` could be
+    hand-edited after being generated and this check would stay silent. This
+    is checked only on the sealed path: a replay or a unit test may
+    legitimately run from a dirty tree, the one-shot final test may not.
     """
-    dirty = _git("status", "--porcelain", "--", "src")
+    dirty = _git("status", "--porcelain", "--", *paths)
     if dirty.returncode == 0 and dirty.stdout.strip():
         raise ValueError(
-            "uncommitted changes under src/ -- refusing to open the sealed period against "
-            f"code that is not committed:\n{dirty.stdout.strip()}")
+            f"uncommitted changes under {paths} -- refusing to open the sealed period against "
+            f"code or a specification that is not committed:\n{dirty.stdout.strip()}")
+
+
+def require_frozen_runner(recorded_commit: str) -> None:
+    """The content of THIS file at `recorded_commit` must be byte-identical to
+    what is actually executing.
+
+    Ancestry only proves the lock's commit precedes HEAD; a clean working tree
+    only proves disk matches HEAD. Neither proves HEAD's own copy of this
+    particular file is the one the lock was generated against -- a later edit
+    to this runner, committed after the lock, would sail through both of those
+    checks. This is the check that actually authenticates the executing code
+    against the frozen specification.
+    """
+    shown = _git("show", f"{recorded_commit}:{RUNNER_PATH}")
+    if shown.returncode != 0:
+        raise ValueError(
+            f"could not read {RUNNER_PATH} at commit {recorded_commit}: {shown.stderr.strip()} -- "
+            "refusing to run: the locked specification's commit does not contain this runner")
+    working = (ROOT / RUNNER_PATH).read_text()
+    if shown.stdout != working:
+        raise ValueError(
+            f"the working copy of {RUNNER_PATH} differs from its content at the locked commit "
+            f"{recorded_commit} -- refusing to run: this checkout is not executing the code "
+            "the specification was locked against")
+
+
+def start_sealed_run(out_dir: Path, head_commit: str) -> Path:
+    """Atomically mark the sealed run as started, or refuse -- the one thing
+    that actually makes "exactly once" true rather than aspirational.
+
+    The opt-in token (`SEAL_MODE`) only expresses intent and can be typed
+    repeatedly; this marker enforces it. `os.O_CREAT | O_EXCL` makes the
+    existence check and the write a single atomic syscall, unlike an
+    `exists()` check followed by a separate write, which has a race and (more
+    to the point here) nothing to stop a second deliberate invocation from
+    simply overwriting the first run's artifacts. The marker is written
+    before any sealed data is opened and is never removed, success or not:
+    the sealed period is "opened" the moment this call succeeds, regardless of
+    what happens afterward.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name in FINAL_ARTIFACT_NAMES:
+        if (out_dir / name).exists():
+            raise RuntimeError(
+                f"{out_dir / name} already exists -- the sealed run has already happened; "
+                "the sealed period may be opened exactly once, ever")
+    marker = out_dir / MARKER_NAME
+    try:
+        fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise RuntimeError(
+            f"{marker} already exists -- the sealed run has already been started; "
+            "the sealed period may be opened exactly once, ever") from None
+    with os.fdopen(fd, "w") as f:
+        json.dump({"started_at": datetime.now(timezone.utc).isoformat(), "head_commit": head_commit}, f)
+    return marker
 
 
 def resolve_factors(spec: dict) -> tuple:
@@ -269,7 +337,17 @@ def run_locked_book(con, scan: str, exp_scan: str, spec: dict, first_date: str,
     """Form cohorts on [first_date, cohort_last], mark P&L through pnl_last so
     the last cohorts formed still finish their hold -- the same distinction
     `week4_models`/`week5_neutral` draw between COHORT_LAST and PNL_LAST.
-    Returns (daily, summary) with exactly the frozen metric set."""
+    Returns (daily, summary, metric_coverage).
+
+    `forward_return_20d` is null for the last `hold_days` or so formation
+    dates of any window that runs to the end of the panel (there is no future
+    20-day return to compute yet), so `daily_rank_ic` legitimately has no
+    entry, or a NaN correlation, for some of those dates -- fewer than the
+    portfolio P&L, which only needs realised daily returns. Dropping those
+    NaNs explicitly (rather than relying on `Series.mean`'s default skipna)
+    and recording both date counts is what turns a silent, unnoticed gap into
+    a documented one.
+    """
     con.execute(f"CREATE OR REPLACE TABLE merged_panel AS {merged_scan_query(scan, exp_scan, pnl_last)}")
     frame = score_frame(con, scan, exp_scan, spec, first_date, cohort_last)
     assert frame.date.max() <= pd.Timestamp(cohort_last), "cohort formed past the formation cutoff"
@@ -277,24 +355,74 @@ def run_locked_book(con, scan: str, exp_scan: str, spec: dict, first_date: str,
     daily = book(con, "merged_panel", frame, spec["weighting"], first_date, pnl_last,
                 cap=spec["cap"], hold=spec["hold_days"])
     assert daily.date.max() <= pd.Timestamp(pnl_last), "P&L marked past pnl_last"
-    ic = daily_rank_ic(con, scan, frame)
+    ic = daily_rank_ic(con, scan, frame).dropna()
+    assert not ic.empty, "no formation date produced a usable rank IC"
     summary = week5_summarize(daily, ic)
     summary["mean_net_exposure"] = daily.net_exposure.mean()
-    return daily, summary
+    coverage = {"rank_ic_dates": int(len(ic)), "portfolio_dates": int(summary["days"])}
+    return daily, summary, coverage
+
+
+def sealed_formation_start(con, scan: str) -> str:
+    """First trading date on or after 2024-01-01, read off the panel's own
+    aligned date index.
+
+    NOT `walk_forward_splits`: its default `first_validation_year` is 2014,
+    so reusing it for the sealed run (as `formation_start` does for replay)
+    would silently open the sealed run's window a decade early, folding ten
+    in-sample years into what must be a 2024-2025-only test. Asserted before
+    any result is read: a wrong start date here is exactly the kind of thing
+    that must fail loudly, not quietly compute the wrong test.
+    """
+    first = con.sql(f"SELECT MIN(date) AS d FROM {scan} WHERE aligned AND date >= DATE '2024-01-01'").df().d.iloc[0]
+    first_date = str(pd.Timestamp(first).date())
+    assert pd.Timestamp(first_date).year == 2024, \
+        f"sealed formation start {first_date} is not in 2024 -- refusing to run"
+    return first_date
+
+
+def cohort_cutoff(con, scan: str, pnl_last: str, hold_days: int) -> str:
+    """Last formation date whose `hold_days`-day hold still finishes by
+    `pnl_last`: the trading date `hold_days` trading days before the last
+    trading day on or before `pnl_last`, read off the panel's own (date, tdi)
+    index rather than a hardcoded calendar date.
+
+    A hardcoded cutoff silently drops cohorts whenever it lands on a
+    non-trading day -- `SEALED_COHORT_LAST = "2025-11-30"` was a Sunday and
+    resolved (via a `date <=` filter) to the last actual trading day before
+    it, two cohorts short of the true cutoff. Trading-day-index arithmetic
+    can't drift from the calendar this way. Used for both replay and the
+    sealed run so one code path serves both.
+    """
+    dates = con.sql(f"""
+        SELECT DISTINCT date, tdi FROM {scan}
+        WHERE aligned AND date <= DATE '{pnl_last}' ORDER BY tdi
+    """).df()
+    pnl_end_tdi = int(dates.tdi.iloc[-1])
+    cutoff_tdi = pnl_end_tdi - hold_days
+    assert cutoff_tdi >= 0, f"hold_days {hold_days} exceeds available trading history before {pnl_last}"
+    row = dates.loc[dates.tdi == cutoff_tdi]
+    assert len(row) == 1, f"no trading date at tdi {cutoff_tdi} (pnl_end_tdi={pnl_end_tdi})"
+    return str(row.date.iloc[0].date())
 
 
 def formation_start(con, scan: str, cohort_last: str) -> str:
     """First validation date of fold 1 -- the one ramp, at the very start of
-    the evaluation window, shared by every book (Weeks 4-5 convention)."""
+    the evaluation window, shared by every book (Weeks 4-5 convention).
+    Replay only: the sealed run has no walk-forward folds to ramp from,
+    see `sealed_formation_start`."""
     dates = con.sql(f"SELECT DISTINCT date FROM {scan} WHERE aligned ORDER BY date").df().date
     splits = walk_forward_splits(dates, last_evaluable=cohort_last)
     return str(splits.validation_start.min())
 
 
-def frozen_protocol(spec: dict, first_date: str, cohort_last: str, pnl_last: str, sealed: bool) -> dict:
+def frozen_protocol(spec: dict, first_date: str, cohort_last: str, pnl_last: str, sealed: bool,
+                    metric_coverage: dict) -> dict:
     """Every remaining choice needed to reproduce the run, beyond what the
-    locked JSON already carries: dates, the single-ramp convention, costs and
-    the metric list."""
+    locked JSON already carries: dates, the single-ramp convention, costs, the
+    metric list, and how many dates each metric was computed over (mean_rank_ic
+    and rank_ic_hac_t over `rank_ic_dates`, every other metric over
+    `portfolio_dates`)."""
     return {
         "sealed": sealed,
         "formation_start": first_date,
@@ -305,6 +433,7 @@ def frozen_protocol(spec: dict, first_date: str, cohort_last: str, pnl_last: str
         "cost_bps": list(COSTS_BPS),
         "neutralisation_controls": list(NEUTRALISATION_CONTROLS),
         "metrics": list(METRICS),
+        "metric_coverage": metric_coverage,
         "spec": spec,
     }
 
@@ -316,9 +445,10 @@ def replay(con, scan: str, exp_scan: str, spec: dict) -> pd.DataFrame:
     missing = [f for f in REPLAY_REQUIRED_TARGETS if f not in spec]
     if missing:
         raise ValueError(f"locked specification missing replay target field(s): {missing}")
-    first_date = formation_start(con, scan, REPLAY_COHORT_LAST)
-    daily, summary = run_locked_book(con, scan, exp_scan, spec, first_date,
-                                     REPLAY_COHORT_LAST, REPLAY_PNL_LAST)
+    cohort_last = cohort_cutoff(con, scan, REPLAY_PNL_LAST, spec["hold_days"])
+    first_date = formation_start(con, scan, cohort_last)
+    daily, summary, coverage = run_locked_book(con, scan, exp_scan, spec, first_date,
+                                               cohort_last, REPLAY_PNL_LAST)
     assert daily.date.max() <= pd.Timestamp(REPLAY_PNL_LAST), "replay read past 2023-12-29"
 
     check_map = {"realised_beta": "gross_return_market_beta", "gross_sharpe": "gross_return_sharpe",
@@ -334,21 +464,29 @@ def replay(con, scan: str, exp_scan: str, spec: dict) -> pd.DataFrame:
     OUT.mkdir(parents=True, exist_ok=True)
     result.to_csv(OUT / "replay_validation.csv", index=False)
     (OUT / "replay_protocol.json").write_text(
-        json.dumps(frozen_protocol(spec, first_date, REPLAY_COHORT_LAST, REPLAY_PNL_LAST, sealed=False),
+        json.dumps(frozen_protocol(spec, first_date, cohort_last, REPLAY_PNL_LAST, sealed=False,
+                                   metric_coverage=coverage),
                    indent=2, default=str))
     return result
 
 
 def run_sealed(con, scan: str, exp_scan: str, spec: dict) -> dict:
-    """Open 2024-2025 exactly once and run the locked specification unchanged."""
-    first_date = formation_start(con, scan, SEALED_COHORT_LAST)
-    daily, summary = run_locked_book(con, scan, exp_scan, spec, first_date,
-                                     SEALED_COHORT_LAST, SEALED_PNL_LAST)
+    """Open 2024-2025 exactly once and run the locked specification unchanged.
+
+    Called only after `start_sealed_run` has atomically claimed the one shot
+    -- this function itself does not enforce exactly-once, it trusts the
+    caller already has.
+    """
+    first_date = sealed_formation_start(con, scan)
+    cohort_last = cohort_cutoff(con, scan, SEALED_PNL_LAST, spec["hold_days"])
+    daily, summary, coverage = run_locked_book(con, scan, exp_scan, spec, first_date,
+                                               cohort_last, SEALED_PNL_LAST)
     OUT.mkdir(parents=True, exist_ok=True)
     daily.to_csv(OUT / "final_daily.csv", index=False)
     pd.Series(summary).to_csv(OUT / "final_result.csv")
     (OUT / "final_protocol.json").write_text(
-        json.dumps(frozen_protocol(spec, first_date, SEALED_COHORT_LAST, SEALED_PNL_LAST, sealed=True),
+        json.dumps(frozen_protocol(spec, first_date, cohort_last, SEALED_PNL_LAST, sealed=True,
+                                   metric_coverage=coverage),
                    indent=2, default=str))
     return summary
 
@@ -380,6 +518,8 @@ def main(argv=None) -> None:
     exp_scan = f"parquet_scan('{(EXPOSURES / '**' / '*.parquet').as_posix()}')"
 
     if sealed:
+        require_frozen_runner(spec["git_commit"])
+        start_sealed_run(OUT, current_head_commit())
         summary = run_sealed(con, scan, exp_scan, spec)
         print(f"\nFINAL RESULT (2024-2025, one shot): gross Sharpe "
               f"{summary['gross_return_sharpe']:.4f}, net Sharpe@10bp "
