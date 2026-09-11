@@ -5,7 +5,7 @@
   "passing_beta_constraint": 20,
   "declared_in": "W5-006",
   "locked_on": "2026-09-10",
-  "git_commit": "7bb90a360750179a45f3152ec723d82c89a9ed89",
+  "git_commit": "d326f25df8181e1e6941f2e57d86655edc4cbef2",
   "factor_set": "drop_rmom_120_20",
   "factors": [
     {
