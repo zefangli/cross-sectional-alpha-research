@@ -26,7 +26,12 @@ days; rank IC measured on the 482 formation dates.
 
 ## 2. The result
 
-| metric | 2014-2023 (in-sample) | **2024-2025 (sealed)** |
+2014-2023 is called the **selection sample** throughout. It was walk-forward
+out-of-sample for the fitted models of Week 4, but it was subsequently used to
+choose the final specification from 40 candidates, so relative to the sealed
+test its role is selection, not estimation.
+
+| metric | 2014-2023 (selection sample) | **2024-2025 (sealed)** |
 |---|---|---|
 | gross Sharpe | 0.534 | **1.522** |
 | HAC t on mean daily gross return | 1.65 | **2.76** |
@@ -44,8 +49,8 @@ days; rank IC measured on the 482 formation dates.
 
 The locked book was profitable out of sample, after costs, at every cost tier
 tested, with a realised market beta of -0.065 -- inside the 0.10 constraint the
-selection rule imposed in sample, which it had no obligation to honour out of
-sample.
+selection rule imposed on the selection sample, which it had no obligation to
+honour out of sample.
 
 Under the null of zero Sharpe the statistic is `t` = 2.15 naive and **2.76 with
 Newey-West at 20 lags** (the staggered cohorts induce serial dependence; the HAC
@@ -58,25 +63,39 @@ against data never previously evaluated.
 
 ## 3. What this does and does not establish
 
-**It is not significantly better than the in-sample estimate.** Out-of-sample
-Sharpe is 1.52 against 0.534 in sample. The difference is +0.99 with a standard
-error of about 1.10, so `t` is 0.90. A tripling looks dramatic and is entirely
-consistent with sampling noise on two years of data. Out-of-sample results
+**The point estimate is imprecise, and the interval must be stated with its
+method.** Two intervals are available and they are not interchangeable:
+
+| method | assumptions | 95% interval on the Sharpe |
+|---|---|---|
+| **HAC (primary)** | inverts the headline Newey-West test, `SE = SR/t` = 0.550; treats volatility as fixed | **[0.44, 2.60]** |
+| iid (sensitivity) | `SE = sqrt((1 + SR^2/2)/years)` = 1.042; adds volatility-estimation uncertainty, ignores autocorrelation | [-0.52, 3.56] |
+
+The **HAC interval is the one consistent with the headline inference** and it
+excludes zero. The iid interval is wider because it prices in uncertainty about
+the volatility estimate as well, but it assumes independence the staggered
+cohorts violate, so it is reported as a sensitivity, not as a competing answer.
+An earlier draft of this memo quoted the iid interval alongside the HAC test and
+called both correct; that was confusing and the HAC interval governs.
+
+Either way the *magnitude* is loosely pinned: the primary interval spans a
+Sharpe of 0.44 to 2.60. Using 1.52 as a forward expectation is unsupported.
+
+**It is not significantly better than the selection sample.** Out-of-sample
+Sharpe is 1.522 against 0.534. Computed consistently with HAC standard errors
+(0.550 and 0.324), the difference is +0.99 with a standard error of 0.639, so
+`t` is 1.55 -- not significant at conventional levels. (An earlier draft
+reported 0.90 using iid standard errors, which was inconsistent with the
+headline test; 1.55 is the correct figure.) A tripling looks dramatic and
+remains consistent with sampling noise on two years. Out-of-sample results
 usually *degrade*; this one improved, and a large favourable surprise warrants
 more scepticism than a small one, not less.
-
-**The point estimate is imprecise.** Two years is 1.99 years of data. An
-approximate 95% interval around the Sharpe of 1.52 runs roughly -0.5 to 3.6. The
-hypothesis test and the estimate say different things and both are correct: the
-mean return is distinguishable from zero, while the *magnitude* is barely
-pinned down at all. Any forward-looking use of 1.52 as an expectation would be
-unsupported by this evidence.
 
 **The specification was selected, and selection is not corrected for.** The
 locked book is the maximum of 20 admissible correlated candidates under a rule
 fixed in advance. Pre-registration makes the out-of-sample test valid as a
 single test; it does not make the *expected* out-of-sample performance equal to
-the in-sample point estimate, and selection normally biases that expectation
+the selection-sample point estimate, and selection normally biases that expectation
 downward. That it came in higher is not explained by selection.
 
 **Two years is one regime.** Both calendar years are positive (2024 Sharpe 1.39,
@@ -85,7 +104,7 @@ neither preferred. This is consistency, not independent confirmation: two
 adjacent years of one market are not two experiments.
 
 **The cost claim remains horizon-fragile.** Breakeven is 49.7 bp out of sample
-against 18.0 bp in sample. W5-005 established that breakeven swings by a factor
+against 18.0 bp on the selection sample. W5-005 established that breakeven swings by a factor
 of 3.7 across four equally defensible holding periods while gross Sharpe barely
 moves. The 20-day horizon was fixed in Week 0 and not tuned, but the breakeven
 figure should be read as horizon-dependent, not as a property of the signal.
@@ -121,10 +140,20 @@ A pre-registered, cost-aware, risk-neutralised five-factor book earned a gross
 Sharpe of 1.52 and a net Sharpe at 10 bp of 1.22 over a sealed two-year period,
 with a HAC `t` of 2.76 and a realised market beta of -0.065.
 
+The claim this supports, stated at the width the evidence actually carries:
+
+> A frozen five-factor specification produced positive, nominally significant
+> returns during its single 2024-2025 held-out outcome test, including after the
+> modelled transaction costs.
+
+It does not establish a durable or deployable alpha. The test covers two years,
+and the cost model omits borrow cost, market impact, short availability and
+capacity entirely.
+
 The correct reading is narrow. The result is real, it was obtained under
 genuine out-of-sample conditions, and it is nominally significant. It is also
 two years long, imprecisely estimated, statistically indistinguishable from the
-much weaker in-sample estimate, and produced by a specification chosen as the
+much weaker selection-sample estimate, and produced by a specification chosen as the
 best of twenty. Weeks 2 through 5 found essentially nothing distinguishable from
 zero; one favourable two-year draw does not overturn that, and the honest
 summary of the whole project is a weak signal that survived a fair test once.
