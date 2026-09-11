@@ -203,6 +203,22 @@
   `run-sealed-2024-2025-exactly-once`; no argument exits before any data is
   opened. Its `replay` mode reproduces the locked book's Week 5 figures to about
   1e-15.
+- Four blocking defects found in review and fixed before the sealed run
+  (W5-010). The worst was a P0: the sealed formation start inherited
+  `walk_forward_splits`' default first validation year of 2014, so the one-shot
+  final test would have evaluated 2014-2025 and reported ten in-sample years as
+  the held-out result. It is now read off the panel as the first trading date on
+  or after 2024-01-01 and asserted. The cohort cutoff was a hardcoded Sunday
+  resolving two cohorts early and is now derived as `pnl_end_tdi - hold_days`
+  (2025-12-02). Exactly-once is enforced by an atomic `O_CREAT|O_EXCL` marker
+  rather than by the opt-in token alone. Provenance now covers the lock JSON and
+  requires the runner's content at the recorded commit to be byte-identical to
+  the executing file. Replay is unchanged and still reproduces all five recorded
+  figures, so the validation baseline was not perturbed.
+- Specification relocked against the corrected runner (W5-011). Regeneration is
+  deterministic -- same winner, same figures, 40 candidates with 20 admissible --
+  with the recorded commit moved to the one containing the corrected runner. All
+  three provenance guards now pass. No final artifact or run marker exists.
 - **The sealed period is outcome-sealed but was not literally untouched**
   (W5-009). Exposures are built over full panel history because a t-1 rolling
   beta needs it, and the first exposure audit summarised coverage and sector
@@ -211,7 +227,7 @@
   from a beta range measured on a query restricted to dates through 2023-11-30.
   The audit now ends at 2023-11-30, and this is disclosed rather than described
   as an untouched seal.
-- Written up in `reports/week5_neutralisation_memo.md`. 66 tests pass.
+- Written up in `reports/week5_neutralisation_memo.md`. 71 tests pass.
 
 ## Next
 
