@@ -33,8 +33,10 @@ honest summary of the whole project, and the point of building it this way.
   within about one standard error of zero.
 - Risk neutralisation (sector, beta, size) fails its pre-declared test in 7 of
   8 books: it halves annualised volatility while trading costs stay flat, so a
-  fixed dollar cost doubles its bite on net Sharpe. Only the raw composite
-  passes both legs of the test.
+  fixed dollar cost doubles its bite on net Sharpe. The one book that passes
+  both legs is the decile-weighted composite -- neutralising it *improves* net
+  Sharpe at 10 bp from 0.155 (raw) to 0.209, while cutting beta from -0.266 to
+  -0.057. Every other book, including the raw composite itself, fails.
 - The final specification was locked by a rule declared before any Week 5
   result existed, applied mechanically to a 40-book candidate grid (20 of
   which pass the beta constraint). The winner is the maximum of correlated
@@ -115,6 +117,13 @@ python src/evaluation/week5_lock.py
 python src/reporting/final_figures.py
 ```
 
+`reports/final_report.pdf` is a rendered copy of `reports/final_report.md`
+(figures embedded), built with `src/reporting/render_pdf.py`. It needs two
+packages not in `requirements.txt` because they are presentation-only and not
+part of the research pipeline -- `pip install markdown xhtml2pdf` -- then
+`python src/reporting/render_pdf.py`. The PDF is checked in so a reader does not
+need that toolchain just to view the result.
+
 Notes:
 
 - `clean_crsp.py` writes a year-partitioned daily panel to
@@ -132,8 +141,13 @@ Notes:
   six).
 - Model fitting, prediction and portfolio cohort formation all stop on
   2023-11-30; P&L is marked through 2023-12-29 so the last cohorts formed
-  still finish their 20-day hold. No 2024 or 2025 observation is read by any
-  of the above -- the sealed period is opened only in Week 6, once.
+  still finish their 20-day hold. `exposures.py` is the one exception: it
+  builds beta/size/sector over the full panel history because the rolling
+  beta needs that history, so it does read 2024-2025 *covariates*, and an
+  early audit summary briefly inspected them (see the disclosure in
+  `reports/week5_neutralisation_memo.md`, section 11). No 2024-2025 return,
+  target, or performance result was computed or evaluated before Week 6 --
+  the sealed period's outcomes are opened only once, there.
 
 ### Week 6: the sealed final test and how to verify it
 

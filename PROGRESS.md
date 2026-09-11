@@ -206,8 +206,8 @@
 - Four blocking defects found in review and fixed before the sealed run
   (W5-010). The worst was a P0: the sealed formation start inherited
   `walk_forward_splits`' default first validation year of 2014, so the one-shot
-  final test would have evaluated 2014-2025 and reported ten in-sample years as
-  the held-out result. It is now read off the panel as the first trading date on
+  final test would have evaluated 2014-2025 and reported ten selection-sample
+  years as the held-out result. It is now read off the panel as the first trading date on
   or after 2024-01-01 and asserted. The cohort cutoff was a hardcoded Sunday
   resolving two cohorts early and is now derived as `pnl_end_tdi - hold_days`
   (2025-12-02). Exactly-once is enforced by an atomic `O_CREAT|O_EXCL` marker
@@ -242,11 +242,12 @@
   0.0364 with a HAC t of 4.63.** Profitable at every cost tier tested, and beta
   stayed inside the selection rule's 0.10 constraint out of sample, which it had
   no obligation to do.
-- The result is NOT significantly better than the in-sample estimate (W6-002).
-  Out-of-sample 1.522 against in-sample 0.534 is a difference of +0.99 with a
-  standard error near 1.10, so t is about 0.90. An approximate 95% interval on
-  the out-of-sample Sharpe runs about -0.5 to 3.6: the mean return is
-  distinguishable from zero, while its magnitude is barely pinned down.
+- The result is NOT significantly better than the selection-sample estimate
+  (W6-002). Out-of-sample 1.522 against selection-sample 0.534 is a difference
+  of +0.99; computed with HAC-consistent standard errors the difference has a
+  standard error of 0.639, so t is about 1.55 -- not significant. The primary
+  HAC 95% interval on the out-of-sample Sharpe is [0.44, 2.60]: the mean return
+  is distinguishable from zero, while its magnitude is loosely pinned down.
 - Both calendar years are positive (2024 Sharpe 1.39, HAC t 1.73; 2025 Sharpe
   1.65, HAC t 2.22), recorded descriptively with neither preferred. Two adjacent
   years of one market are consistency, not two experiments.
