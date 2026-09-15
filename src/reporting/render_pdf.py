@@ -31,7 +31,7 @@ CSS = """
 @page { size: Letter; margin: 1.6cm 1.7cm 1.9cm 1.7cm;
   @frame footer { -pdf-frame-content: footerContent; bottom: 0.8cm; height: 1cm;
     left: 1.7cm; right: 1.7cm; } }
-body { font-family: Helvetica, sans-serif; font-size: 9.3pt; line-height: 1.32;
+body { font-family: Helvetica, sans-serif; font-size: 8.8pt; line-height: 1.28;
   color: #1a1a1a; }
 h1 { font-size: 16.5pt; margin: 0 0 4pt 0; color: #111; }
 h2 { font-size: 12pt; margin: 14pt 0 5pt 0; color: #111;
@@ -42,8 +42,8 @@ strong { color: #000; }
 blockquote { margin: 6pt 10pt; padding: 5pt 9pt; background: #f2f2f2;
   border-left: 2.5pt solid #666; font-style: italic; }
 table { border-collapse: collapse; width: 100%; margin: 6pt 0 8pt 0;
-  font-size: 8.3pt; }
-th, td { border: 0.5pt solid #999; padding: 2.6pt 5pt; text-align: left; }
+  font-size: 7.9pt; }
+th, td { border: 0.5pt solid #999; padding: 2.2pt 4.5pt; text-align: left; }
 th { background: #e4e4e4; font-weight: bold; }
 code { font-family: Courier, monospace; font-size: 8.3pt; background: #eee;
   padding: 0 2pt; }

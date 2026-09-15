@@ -53,13 +53,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import numpy as np
 import pandas as pd
 
-from src.evaluation.factor_eval import newey_west_tstat, OVERLAP_LAG
+from src.evaluation.factor_eval import newey_west_tstat, spearman_query, OVERLAP_LAG
 from src.evaluation.week3_baseline import COMPOSITE
 from src.features.factors import ALL_FACTORS, FACTOR_SIGN
 from src.models.splits import walk_forward_splits
 from src.models.walk_forward import COHORT_LAST, MODELS, PREDICTIONS, TARGET
 from src.portfolio.backtest import (CAP, COSTS_BPS, TRADING_DAYS,
-                                     capped_neutral_weights, daily_book, performance_daily)
+                                     capped_neutral_weights, daily_book, performance_daily,
+                                     require_complete_marking)
 
 ROOT = Path(__file__).resolve().parents[2]
 PANEL = ROOT / "data" / "processed" / "factor_panel"
@@ -81,11 +82,13 @@ def train_means(con, scan: str, splits: pd.DataFrame) -> pd.DataFrame:
 def prediction_quality(con, scan: str, predictions: pd.DataFrame, splits: pd.DataFrame) -> tuple:
     """Per-fold and pooled MSE/MAE/OOS R^2 and daily cross-sectional IC, on validation rows.
 
-    Pearson IC is `corr(prediction, y)`; Spearman is Pearson correlation of the
-    two within-date percentile ranks, the same construction `factor_eval.py`
-    uses. Both are averaged into a daily series and given a Newey-West t-stat
-    at `OVERLAP_LAG` lags, since the shared 20-day target makes adjacent days
-    overlap.
+    Pearson IC is `corr(prediction, y)`; Spearman is the correlation of
+    within-date average ranks over complete (prediction, target) pairs, via
+    `factor_eval.spearman_query`, the same construction Weeks 2 and 5 use. Both
+    are averaged into a daily series, sorted chronologically, and given a
+    Newey-West t-stat at `OVERLAP_LAG` lags, since the shared 20-day target
+    makes adjacent days overlap. An earlier version ranked NULL targets and
+    used competition ranks (2026-09-14 review, items 4 and 5).
     """
     con.register("predictions", predictions.loc[predictions.is_validation,
                  ["permno", "date", "tdi", "fold", "model", "prediction"]])
@@ -109,19 +112,14 @@ def prediction_quality(con, scan: str, predictions: pd.DataFrame, splits: pd.Dat
     error_fold = con.sql(error_sql.format(by="fold, model")).df()
     error_pooled = con.sql(error_sql.format(by="model")).df()
 
-    daily = con.sql("""
-        WITH ranked AS (
-            SELECT *,
-                (RANK() OVER (PARTITION BY date, model ORDER BY prediction) - 1.0)
-                    / NULLIF(COUNT(*) OVER (PARTITION BY date, model) - 1, 0) AS pred_rank,
-                (RANK() OVER (PARTITION BY date, model ORDER BY y) - 1.0)
-                    / NULLIF(COUNT(*) OVER (PARTITION BY date, model) - 1, 0) AS y_rank
-            FROM joined
-        )
-        SELECT date, fold, model,
-            corr(prediction, y) AS ic_pearson, corr(pred_rank, y_rank) AS ic_spearman
-        FROM ranked GROUP BY date, fold, model
-    """).df()
+    by = "date, fold, model"
+    daily = con.sql(f"""
+        SELECT {by}, corr(prediction, y) AS ic_pearson FROM joined GROUP BY {by}
+    """).df().merge(con.sql(spearman_query("joined", by, "prediction", "y")).df(),
+                    on=["date", "fold", "model"], how="left")
+    # HAC standard errors depend on temporal adjacency; SQL grouping promises
+    # no order, so sort explicitly before any lagged statistic.
+    daily = daily.sort_values(["model", "fold", "date"]).reset_index(drop=True)
 
     def ic_agg(group_cols):
         return daily.groupby(group_cols).agg(
@@ -195,6 +193,7 @@ def book(con, scan: str, frame: pd.DataFrame, weighting: str, first_date: str, l
 
 def summarize(daily: pd.DataFrame) -> dict:
     """Book statistics, mirroring `backtest.run`'s summary block over a concatenated frame."""
+    require_complete_marking(daily)
     summary = {
         "days": len(daily),
         "first_date": str(daily.date.min().date()), "last_date": str(daily.date.max().date()),

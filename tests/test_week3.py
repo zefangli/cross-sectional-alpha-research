@@ -86,6 +86,7 @@ def flat_panel(days=60, ret=0.0):
         "tdi": np.tile(np.arange(days), 2),
         "ret": ret,
         "value_weighted_market_return": 0.0,
+        "delisting_flag": "N",
     })
 
 
@@ -124,7 +125,26 @@ def test_turnover_counts_the_cohort_entering_and_the_cohort_expiring():
     book = book_for(weights, panel).set_index("tdi")
     assert abs(book.traded.loc[11] - 1.0 / HOLD) < 1e-12   # entry
     assert abs(book.traded.loc[31] - 1.0 / HOLD) < 1e-12   # expiry
-    assert book.traded.loc[12:30].abs().max() < 1e-12      # nothing in between
+    assert book.traded.loc[12:30].abs().max() < 1e-12      # nothing in between (flat prices)
+
+
+def test_holding_constant_targets_through_a_price_move_requires_a_trade():
+    """2026-09-14 review, item 1: +25%/-25% targets, the long leg returns +10%,
+    the short leg 0. Restoring the targets next day trades 2.439% of NAV; the
+    old target-vs-target comparison reported zero."""
+    dates = pd.bdate_range("2020-01-01", periods=5)
+    panel = pd.DataFrame([
+        dict(permno=p, date=d, tdi=t, ret=0.1 if p == 1 and t == 1 else 0.0,
+             value_weighted_market_return=0.0, delisting_flag="N")
+        for p in (1, 2) for t, d in enumerate(dates)])
+    con = duckdb.connect()
+    con.register("panel", panel)
+    con.register("cohort", pd.DataFrame({"permno": [1, 2], "tdi": [0, 0], "w": [.5, -.5]}))
+    book = daily_book(con, "panel", "2020-01-01", "2020-02-01", hold=2).set_index("tdi")
+    weights, returns = np.array([.25, -.25]), np.array([.1, 0.])
+    drifted = weights * (1 + returns) / (1 + weights @ returns)
+    assert abs(book.traded.loc[2] - np.abs(weights - drifted).sum()) < 1e-12
+    assert abs(book.traded.loc[2] - 0.024390243902439) < 1e-12
 
 
 def test_a_gap_in_a_stocks_history_does_not_extend_its_holding():
@@ -135,6 +155,83 @@ def test_a_gap_in_a_stocks_history_does_not_extend_its_holding():
     assert abs(book.gross_exposure.loc[14] - 1.0 / HOLD) < 1e-12
     assert abs(book.gross_exposure.loc[18] - 1.0 / HOLD) < 1e-12   # resumes by date
     assert 31 not in book.index or book.gross_exposure.loc[31] == 0
+
+
+def test_first_accrual_day_records_entry_turnover_not_null():
+    """Formation at the first panel tdi so h_prev is an empty window (the
+    original NULL-SUM failure), not a day with prior history already on the grid."""
+    panel = flat_panel()
+    weights = pd.DataFrame({"permno": [1], "tdi": [0], "w": [1.0]})
+    book = book_for(weights, panel).set_index("tdi")
+    assert not pd.isna(book.traded.loc[1])
+    assert abs(book.traded.loc[1] - 1.0 / HOLD) < 1e-12
+    assert abs(book.net_return_10bp.loc[1] - (0.0 - (10 / 1e4) * (1.0 / HOLD))) < 1e-12
+
+
+def test_disappeared_stock_keeps_exposure_and_closes_with_a_trade():
+    panel = flat_panel(days=60, ret=0.01)
+    panel.loc[panel.permno == 2, "ret"] = -0.01
+    panel = panel[~((panel.permno == 2) & (panel.tdi > 25))]
+    weights = pd.DataFrame({"permno": [1, 2], "tdi": [10, 10], "w": [1.0, -1.0]})
+    book = book_for(weights, panel).set_index("tdi")
+    assert abs(book.gross_exposure.loc[26] - 2.0 / HOLD) < 1e-12
+    assert book.positions_without_return.loc[26] == 1
+    # Missing ret accrues as 0 for that name; the other leg still marks
+    assert abs(book.gross_return.loc[26] - (0.01 / HOLD)) < 1e-12
+    # Expiry trades the drifted holdings: stock 1 grew by its +1% on day 30,
+    # stock 2 (no return) drifted as 0, both over the book's own day-30 return.
+    w = 1.0 / HOLD
+    book_ret_30 = w * 0.01
+    expected = (w * 1.01 + w) / (1 + book_ret_30)
+    assert abs(book.traded.loc[31] - expected) < 1e-12
+
+
+def test_summarise_reports_missing_return_count():
+    from src.portfolio.backtest import require_complete_marking
+    panel = flat_panel(days=60)
+    panel = panel[~((panel.permno == 2) & (panel.tdi > 25))]
+    weights = pd.DataFrame({"permno": [1, 2], "tdi": [10, 10], "w": [1.0, -1.0]})
+    book = book_for(weights, panel)
+    require_complete_marking(book)  # must not raise
+    assert book.positions_without_return.sum() > 0
+
+
+def test_exit_only_day_with_null_return_still_charges_costs():
+    """Stock data ends on the last holding day; the liquidation day has weight=0
+    and NULL ret. That must be gross=0 with costs on traded, not a NaN day that
+    slips past positions_without_return (which only counts live weights)."""
+    hold = 2
+    form, last_hold, exit_tdi = 10, 12, 13
+    rows = []
+    for tdi, date in enumerate(pd.bdate_range("2020-01-01", periods=exit_tdi + 1)):
+        if tdi <= last_hold:
+            rows.append({"permno": 1, "date": date, "tdi": tdi, "ret": 0.0,
+                         "value_weighted_market_return": 0.0, "delisting_flag": "N"})
+        rows.append({"permno": 2, "date": date, "tdi": tdi, "ret": 0.0,
+                     "value_weighted_market_return": 0.0, "delisting_flag": "N"})
+    panel = pd.DataFrame(rows)
+    con = duckdb.connect()
+    con.register("panel", panel)
+    con.register("cohort", pd.DataFrame({"permno": [1], "tdi": [form], "w": [1.0]}))
+    book = daily_book(con, "panel", "2020-01-01", "2030-01-01", hold=hold).set_index("tdi")
+    row = book.loc[exit_tdi]
+    assert row.positions == 0
+    assert row.positions_without_return == 0
+    assert abs(row.traded - 0.5) < 1e-12
+    assert abs(row.gross_return - 0.0) < 1e-12
+    assert abs(row.net_return_10bp - (-0.0005)) < 1e-12
+
+
+def test_terminal_liquidation_charges_remaining_gross_at_cutoff():
+    panel = flat_panel(days=60)
+    weights = pd.DataFrame({"permno": [1], "tdi": [10], "w": [1.0]})
+    con = duckdb.connect()
+    con.register("cohort", weights)
+    con.register("panel", panel)
+    last_accrual = str(panel.loc[panel.tdi == 30, "date"].iloc[0].date())
+    book = daily_book(con, "panel", "2020-01-01", last_accrual).set_index("tdi")
+    assert abs(book.traded.loc[30] - 1.0 / HOLD) < 1e-12
+    assert abs(book.gross_exposure.loc[30] - 1.0 / HOLD) < 1e-12
 
 
 # --- statistics --------------------------------------------------------------

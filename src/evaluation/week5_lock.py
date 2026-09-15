@@ -161,6 +161,16 @@ def parameterisation(row: pd.Series) -> dict:
     return spec
 
 
+def lock_target(out: Path, relock: bool) -> Path:
+    """The historical lock is immutable by default: once it exists, a rerun
+    writes its selection next to it as `reselection.json` (an audit of what
+    the rule would pick now), never over it. `--relock` is the only way to
+    replace it, and the sealed period has already been opened against the
+    existing one, so there is no legitimate reason to (2026-09-14 review, 7)."""
+    lock = out / "locked_specification.json"
+    return lock if relock or not lock.exists() else out / "reselection.json"
+
+
 def main() -> None:
     import duckdb
 
@@ -205,7 +215,11 @@ def main() -> None:
             },
         }
 
-    (OUT / "locked_specification.json").write_text(json.dumps(lock, indent=2))
+    target = lock_target(OUT, relock="--relock" in sys.argv)
+    target.write_text(json.dumps(lock, indent=2))
+    if target.name != "locked_specification.json":
+        print(f"Existing lock preserved. This re-selection was written to {target.name}; "
+              "pass --relock to overwrite the historical lock deliberately.\n")
 
     display = table.assign(beta_ok=table.realised_beta.abs() <= BETA_LIMIT) \
         .sort_values("net_sharpe_10bp", ascending=False)

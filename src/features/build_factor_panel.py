@@ -30,8 +30,11 @@ SUMMARY = ROOT / "data" / "processed" / "factor_panel_validation.csv"
 def panel_query(source: str, names=None) -> str:
     names = names or ALL_FACTORS
     available = " AND ".join(f"f_{n} IS NOT NULL" for n in names)
+    # Rank within the aligned population only (PARTITION BY date, aligned), then
+    # gate on aligned so non-aligned rows stay NULL. Ranking all rows while
+    # dividing by n_aligned lets percentiles exceed 1.
     ranks = ",\n            ".join(
-        f"CASE WHEN aligned THEN (RANK() OVER (PARTITION BY date ORDER BY f_{n}) - 1.0)"
+        f"CASE WHEN aligned THEN (RANK() OVER (PARTITION BY date, aligned ORDER BY f_{n}) - 1.0)"
         f" / NULLIF(COUNT(*) FILTER (aligned) OVER d - 1, 0) END AS rank_{n}"
         for n in names)
     return f"""
@@ -40,7 +43,7 @@ def panel_query(source: str, names=None) -> str:
             SELECT *, (eligibility_flag AND {available}) AS aligned FROM factors
         )
         SELECT permno, date, tdi, eligibility_flag, aligned, forward_return_20d,
-            ret, value_weighted_market_return,
+            ret, value_weighted_market_return, delisting_flag,
             {", ".join(f"f_{n}" for n in names)},
             {ranks},
             COUNT(*) FILTER (aligned) OVER d AS n_aligned,

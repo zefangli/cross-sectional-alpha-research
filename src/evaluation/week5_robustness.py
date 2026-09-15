@@ -45,7 +45,8 @@ from src.features.factors import ALL_FACTORS, FACTOR_SIGN
 from src.models.splits import walk_forward_splits
 from src.models.walk_forward import COHORT_LAST
 from src.portfolio.backtest import (COSTS_BPS, HOLD_DAYS, TRADING_DAYS,
-                                     capped_neutral_weights, daily_book, performance_daily)
+                                     capped_neutral_weights, daily_book, performance_daily,
+                                     require_complete_marking)
 
 ROOT = Path(__file__).resolve().parents[2]
 PANEL = ROOT / "data" / "processed" / "factor_panel"
@@ -90,6 +91,7 @@ def book(con, scan: str, frame: pd.DataFrame, weighting: str, first_date: str,
 
 def summarize(daily: pd.DataFrame) -> dict:
     """Book statistics: annualised performance plus the 20-lag HAC t-stat and breakeven."""
+    require_complete_marking(daily)
     summary = {
         "days": len(daily),
         "annual_turnover": daily.turnover.mean() * TRADING_DAYS,
@@ -279,13 +281,19 @@ def main() -> None:
     full = {w: book(con, scan, add_signal(raw_frame, ALL_FACTORS), w, first_date, PNL_LAST)
             for w in WEIGHTINGS}
     full_summary = {w: summarize(full[w]) for w in WEIGHTINGS}
-    assert abs(full_summary["rank"]["gross_return_sharpe"] - 0.297) < 0.01, \
-        "recomputed composite must reproduce the Week 4 headline gross Sharpe"
-    assert abs(full_summary["rank"]["hac_t"] - 1.01) < 0.05, \
-        "recomputed composite must reproduce the Week 4 headline HAC t"
-    print("Full composite (rank weighting) reproduces the Week 4 headline: "
-          f"gross Sharpe {full_summary['rank']['gross_return_sharpe']:.3f}, "
-          f"HAC t {full_summary['rank']['hac_t']:.2f}\n")
+    if "post_fix" in OUT.as_posix():
+        print("Post-fix composite (rank weighting): "
+              f"gross Sharpe {full_summary['rank']['gross_return_sharpe']:.3f}, "
+              f"HAC t {full_summary['rank']['hac_t']:.2f} "
+              "(pre-fix Week 4 headline asserts skipped)\n")
+    else:
+        assert abs(full_summary["rank"]["gross_return_sharpe"] - 0.297) < 0.01, \
+            "recomputed composite must reproduce the Week 4 headline gross Sharpe"
+        assert abs(full_summary["rank"]["hac_t"] - 1.01) < 0.05, \
+            "recomputed composite must reproduce the Week 4 headline HAC t"
+        print("Full composite (rank weighting) reproduces the Week 4 headline: "
+              f"gross Sharpe {full_summary['rank']['gross_return_sharpe']:.3f}, "
+              f"HAC t {full_summary['rank']['hac_t']:.2f}\n")
 
     ablation = ablation_table(con, scan, raw_frame, first_date)
     ablation.to_csv(OUT / "ablation.csv", index=False)

@@ -9,9 +9,20 @@ mean/cov/var, plain means). The only editorial judgement is layout, and the
 one rule threaded through every panel: a figure spanning both periods must
 never look like one continuous backtest, because the selection sample was
 used to *choose* this book and the sealed period was not.
+
+Two versions exist (README, "Two reproducible versions"). The default draws
+the original record from `reports/week5` and `reports/week6` into
+`reports/figures/`. `--post-fix` draws the 2026-09-14 correction audit from
+`reports/post_fix/` into `reports/post_fix/figures/`, relabelled so the
+2024-2025 curve reads as a recomputation of the same locked book, never as a
+fresh sealed test. Breakevens and the HAC interval are computed from the daily
+series rather than typed in, so both versions are drawn by the same code.
 """
 from pathlib import Path
+import sys
 from typing import Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import matplotlib
 matplotlib.use("Agg")
@@ -19,10 +30,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from src.evaluation.factor_eval import newey_west_tstat, OVERLAP_LAG
+
 ROOT = Path(__file__).resolve().parents[2]
 W5 = ROOT / "reports" / "week5"
 W6 = ROOT / "reports" / "week6"
 OUT = ROOT / "reports" / "figures"
+SEALED_DAILY = "final_daily.csv"
+CANDIDATES = ROOT / "reports" / "week5" / "candidates.csv"   # the lock's grid, both versions
 
 LOCKED = "drop_rmom_120_20__neutral__decile"
 SEAL_DATE = pd.Timestamp("2024-01-03")
@@ -36,14 +51,37 @@ SEALED = "sealed test (2024-2025, evaluated once)"
 GREY, BLACK = "0.55", "0.0"
 
 
+def use_post_fix() -> None:
+    """Point every input and output at the correction audit tree."""
+    global W5, W6, OUT, SEALED_DAILY, SELECTION, SEALED
+    W5 = ROOT / "reports" / "post_fix" / "week5"
+    W6 = ROOT / "reports" / "post_fix" / "week6_audit"
+    OUT = ROOT / "reports" / "post_fix" / "figures"
+    SEALED_DAILY = "audit_daily.csv"
+    SELECTION = "selection sample (2014-2023, corrected recomputation)"
+    SEALED = "2024-2025 correction audit (same locked book, recomputed after fixes; not a new sealed test)"
+
+
 def load() -> Tuple[pd.DataFrame, pd.DataFrame]:
     sel = pd.read_csv(W5 / f"daily_{LOCKED}.csv", parse_dates=["date"])
-    sea = pd.read_csv(W6 / "final_daily.csv", parse_dates=["date"])
+    sea = pd.read_csv(W6 / SEALED_DAILY, parse_dates=["date"])
     return sel, sea
 
 
 def sharpe(returns: pd.Series) -> float:
     return returns.mean() / returns.std(ddof=1) * np.sqrt(252)
+
+
+def breakeven_bp(df: pd.DataFrame) -> float:
+    return 1e4 * df.gross_return.mean() / df.traded.mean()
+
+
+def hac_interval(returns: pd.Series) -> Tuple[float, float, float]:
+    """(Sharpe, lower, upper): the 95% interval that inverts the Newey-West
+    test, SE = SR / t, the convention the Week 6 memo settled on."""
+    sr = sharpe(returns)
+    se = sr / newey_west_tstat(returns, OVERLAP_LAG)
+    return sr, sr - 1.96 * se, sr + 1.96 * se
 
 
 def fig_cumulative(sel, sea, path) -> None:
@@ -70,12 +108,12 @@ def fig_cumulative(sel, sea, path) -> None:
 
 
 def fig_sharpe_vs_cost(sel, sea, path) -> None:
-    """Sharpe at each modelled cost tier, both periods, with the breakeven
-    (Sharpe = 0 crossing) marked at the values already reported: 18.0bp
-    selection, 49.7bp sealed."""
+    """Sharpe at each modelled cost tier, both periods, with each period's
+    breakeven (Sharpe = 0 crossing) and the 2024-2025 gross Sharpe's HAC
+    interval, all computed from the daily series."""
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
-    for df, label, color, breakeven in [(sel, SELECTION, GREY, 18.028461),
-                                         (sea, SEALED, BLACK, 49.66280)]:
+    for df, label, color in [(sel, SELECTION, GREY), (sea, SEALED, BLACK)]:
+        breakeven = breakeven_bp(df)
         cols = ["gross_return"] + [f"net_return_{b}bp" for b in COSTS[1:]]
         sharpes = [sharpe(df[c].dropna()) for c in cols]
         ax.plot(COSTS, sharpes, marker="o", ms=4, color=color, label=label)
@@ -84,9 +122,10 @@ def fig_sharpe_vs_cost(sel, sea, path) -> None:
                     textcoords="offset points", xytext=(4, 6), fontsize=7, color=color)
     ax.set_ylim(top=3.3)
     ax.axhline(0, color="k", lw=0.8)
-    ax.errorbar([1], [1.5216], yerr=[[1.5216 - 0.44], [2.60 - 1.5216]],
+    sr, lo, hi = hac_interval(sea.gross_return)
+    ax.errorbar([1], [sr], yerr=[[sr - lo], [hi - sr]],
                 fmt="none", ecolor="k", elinewidth=1, capsize=4)
-    ax.annotate("sealed gross Sharpe 1.52\nprimary HAC 95% CI [0.44, 2.60]", (1, 2.60),
+    ax.annotate(f"2024-2025 gross Sharpe {sr:.2f}\nprimary HAC 95% CI [{lo:.2f}, {hi:.2f}]", (1, hi),
                 textcoords="offset points", xytext=(6, 2), fontsize=7)
     ax.set_xlabel("assumed cost, bp of traded notional")
     ax.set_ylabel("annualised Sharpe")
@@ -150,7 +189,7 @@ def fig_candidate_grid(path) -> None:
     beta, the |beta|<=0.10 admissibility band, and the locked winner. Shows
     the selection rule doing its work and the size of the field it was
     chosen from."""
-    cand = pd.read_csv(W5 / "candidates.csv")
+    cand = pd.read_csv(CANDIDATES)
     admissible = cand.realised_beta.abs() <= 0.10
     winner = cand.book == LOCKED
 
@@ -165,7 +204,7 @@ def fig_candidate_grid(path) -> None:
     ax.axhline(0, color="k", lw=0.6)
     ax.set_xlabel("realised market beta, selection sample")
     ax.set_ylabel("net Sharpe at 10bp, selection sample")
-    ax.set_title("The 40-book candidate grid: selection-sample Sharpe vs. realised beta\n"
+    ax.set_title("The 40-book candidate grid as locked (original record): net Sharpe vs. realised beta\n"
                  "(the locked book is the best of 20 admissible, correlated candidates)")
     ax.legend(fontsize=7)
     fig.tight_layout()
@@ -192,6 +231,8 @@ def fig_drawdown(sel, sea, path) -> None:
 
 
 def main() -> None:
+    if "--post-fix" in sys.argv:
+        use_post_fix()
     OUT.mkdir(parents=True, exist_ok=True)
     sel, sea = load()
     assert sel.date.max() < SEAL_DATE <= sea.date.min()

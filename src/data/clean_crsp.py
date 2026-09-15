@@ -1,4 +1,22 @@
-"""Stream a CRSP CSV into an auditable, year-partitioned daily panel."""
+"""Stream a CRSP CSV into an auditable, year-partitioned daily panel.
+
+The cleaned panel keeps every row of every US common share (`IDENTITY` below)
+within its valid classification interval. Exchange, issuer, conditional-type
+and trading-status screens are NOT applied here: they belong to *entry*
+eligibility (`build_research_panel.py`), whereas this panel must also mark
+names already held when they later halt, move exchange or delist. An earlier
+version filtered on all of them, so a held name that changed status vanished
+mid-hold and accrued 0 (2026-09-14 review, item 3). `SECURITY_AUDIT` still
+reports the issuer/conditional/status mix for reference.
+
+Delisting event rows are kept too. In CIZ format the delisting return is a
+`DlyRet` observation with `DlyDelFlg = 'Y'`, dated the trading day after the
+last trade and carrying placeholder classifications (`SecurityType = 'N/A'`,
+`TradingStatusFlg = 'D'` ...) that fail every identity screen. They are
+retained for any PERMNO that has identity rows in the panel, deduplicated to
+one row per (PERMNO, date) with an identity row winning a tie, and are never
+formation rows downstream (2026-09-15 follow-up, item 1).
+"""
 from pathlib import Path
 import sys
 
@@ -33,51 +51,24 @@ def write_summary(con) -> None:
     """)
 
 
-def main() -> None:
-    try:
-        import duckdb
-    except ModuleNotFoundError:
-        sys.exit("DuckDB is required. Run: python -m pip install -r requirements.txt")
-    if "--validate-only" in sys.argv:
-        con = duckdb.connect()
-        write_summary(con)
-        print(f"Wrote validation: {SUMMARY}")
-        return
-    if not RAW.exists():
-        sys.exit(f"Raw file not found: {RAW}")
-
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect()
-    source = f"read_csv('{RAW.as_posix()}', header=true, all_varchar=true)"
-    valid = """
+VALID = """
         TRY_CAST(DlyCalDt AS DATE) BETWEEN TRY_CAST(SecInfoStartDt AS DATE)
             AND TRY_CAST(SecInfoEndDt AS DATE)
-    """
-    universe = """
+        AND TRY_CAST(DlyCalDt AS DATE) BETWEEN DATE '2005-01-01' AND DATE '2025-12-31'
+"""
+IDENTITY = """
         USIncFlg = 'Y' AND SecurityType = 'EQTY' AND SecuritySubType = 'COM'
-        AND ShareType = 'NS' AND PrimaryExch IN ('N', 'A', 'Q')
-        AND IssuerType = 'CORP' AND ConditionalType = 'RW'
-        AND TradingStatusFlg = 'A'
-    """
-    con.execute(f"CREATE VIEW raw AS SELECT * FROM {source}")
-    con.execute(f"""
-        COPY (
-            SELECT
-                COALESCE(IssuerType, '<NULL>') AS issuer_type,
-                COALESCE(ConditionalType, '<NULL>') AS conditional_type,
-                COALESCE(TradingStatusFlg, '<NULL>') AS trading_status_flag,
-                COUNT(*) AS rows
-            FROM raw
-            WHERE {valid}
-              AND USIncFlg = 'Y' AND SecurityType = 'EQTY' AND SecuritySubType = 'COM'
-              AND ShareType = 'NS' AND PrimaryExch IN ('N', 'A', 'Q')
-              AND TRY_CAST(DlyCalDt AS DATE) BETWEEN DATE '2005-01-01' AND DATE '2025-12-31'
-            GROUP BY 1, 2, 3
-            ORDER BY rows DESC
-        ) TO '{SECURITY_AUDIT.as_posix()}' (HEADER, DELIMITER ',')
-    """)
-    con.execute(f"""
-        COPY (
+        AND ShareType = 'NS'
+"""
+EVENT = "DlyDelFlg = 'Y'"
+
+
+def clean_query(raw: str) -> str:
+    """The cleaned panel as a SELECT over the raw relation `raw`: identity rows,
+    plus delisting event rows for PERMNOs that have identity rows, one row per
+    (PERMNO, date)."""
+    return f"""
+        SELECT * EXCLUDE (is_event) FROM (
             SELECT DISTINCT
                 TRY_CAST(PERMNO AS BIGINT) AS permno,
                 TRY_CAST(DlyCalDt AS DATE) AS date,
@@ -102,12 +93,51 @@ def main() -> None:
                 DlyDelFlg AS delisting_flag,
                 DlyRetMissFlg AS return_missing_flag,
                 DlyRetDurFlg AS return_duration_flag,
-                EXTRACT(YEAR FROM TRY_CAST(DlyCalDt AS DATE))::INTEGER AS year
+                EXTRACT(YEAR FROM TRY_CAST(DlyCalDt AS DATE))::INTEGER AS year,
+                NOT ({IDENTITY}) AS is_event
+            FROM {raw}
+            WHERE {VALID}
+              AND (({IDENTITY})
+                   OR ({EVENT} AND PERMNO IN (
+                          SELECT DISTINCT PERMNO FROM {raw} WHERE {VALID} AND {IDENTITY})))
+        )
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY permno, date ORDER BY is_event) = 1
+    """
+
+
+def main() -> None:
+    try:
+        import duckdb
+    except ModuleNotFoundError:
+        sys.exit("DuckDB is required. Run: python -m pip install -r requirements.txt")
+    if "--validate-only" in sys.argv:
+        con = duckdb.connect()
+        write_summary(con)
+        print(f"Wrote validation: {SUMMARY}")
+        return
+    if not RAW.exists():
+        sys.exit(f"Raw file not found: {RAW}")
+
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect()
+    source = f"read_csv('{RAW.as_posix()}', header=true, all_varchar=true)"
+    con.execute(f"CREATE VIEW raw AS SELECT * FROM {source}")
+    con.execute(f"""
+        COPY (
+            SELECT
+                COALESCE(IssuerType, '<NULL>') AS issuer_type,
+                COALESCE(ConditionalType, '<NULL>') AS conditional_type,
+                COALESCE(TradingStatusFlg, '<NULL>') AS trading_status_flag,
+                COUNT(*) AS rows
             FROM raw
-            WHERE {valid}
-              AND {universe}
-              AND TRY_CAST(DlyCalDt AS DATE) BETWEEN DATE '2005-01-01' AND DATE '2025-12-31'
-        ) TO '{OUT.as_posix()}' (FORMAT PARQUET, PARTITION_BY (year), OVERWRITE_OR_IGNORE TRUE)
+            WHERE {VALID} AND {IDENTITY}
+            GROUP BY 1, 2, 3
+            ORDER BY rows DESC
+        ) TO '{SECURITY_AUDIT.as_posix()}' (HEADER, DELIMITER ',')
+    """)
+    con.execute(f"""
+        COPY ({clean_query('raw')})
+        TO '{OUT.as_posix()}' (FORMAT PARQUET, PARTITION_BY (year), OVERWRITE_OR_IGNORE TRUE)
     """)
     write_summary(con)
     print(f"Wrote panel: {OUT}")

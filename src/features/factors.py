@@ -143,7 +143,7 @@ def _query(source: str, columns: dict, extra: str = "") -> str:
             FROM (SELECT DISTINCT date FROM {source})
         ), base AS (
             SELECT permno, date, tdi, eligibility_flag, forward_return_20d,
-                   ret, {_MKT},
+                   ret, {_MKT}, delisting_flag,
                    volume / NULLIF(shares_outstanding, 0) AS turnover,
                    PRODUCT(1 + ret) OVER (
                        PARTITION BY permno ORDER BY tdi
@@ -161,7 +161,7 @@ def _query(source: str, columns: dict, extra: str = "") -> str:
             FROM base
             WINDOW p AS (PARTITION BY permno ORDER BY tdi)
         )
-        SELECT permno, date, tdi, eligibility_flag, forward_return_20d,
+        SELECT permno, date, tdi, eligibility_flag, forward_return_20d, delisting_flag,
                {extra}
                {selected}
         FROM lagged

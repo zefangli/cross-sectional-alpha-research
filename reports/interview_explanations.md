@@ -16,7 +16,9 @@ Almost everything was a null. Only one factor survived a multiple-testing
 correction, none was tradable alone after costs, and machine learning models
 lost to a simple equal-weighted composite. I locked one specification by a rule
 I wrote down in advance, opened the sealed two years once, and it came out
-positive and nominally significant after costs -- a Sharpe of 1.5, t of 2.8.
+positive and nominally significant after costs -- a gross Sharpe of 1.4, t of
+2.7, net 1.1 at ten basis points, after an external review made me fix the
+accounting.
 
 That's a weak signal that passed a fair test once. Two years isn't enough to
 call it alpha, and I don't.
@@ -53,10 +55,13 @@ You can't lever that away, because net Sharpe is leverage-invariant.
 
 **The end.** I locked one specification by a rule declared in advance, applied
 mechanically to 40 candidates, then ran the sealed two years once: gross Sharpe
-1.52, HAC t 2.76, net Sharpe 1.22 at 10 basis points, realised beta minus 0.065.
-Positive and nominally significant. But two years, one selected specification,
-and a cost model with no borrow, impact or capacity. It supports a narrow claim
-and no more.
+1.52, HAC t 2.76, net 1.22 at 10 basis points. An external review then found
+that my turnover ignored price drift and my IC series wasn't sorted before its
+HAC statistic, among other things; recomputed on the corrected code the same
+locked book gives 1.43, t 2.71, net 1.06, breakeven 38 rather than 50 basis
+points. Positive and nominally significant either way. But two years, one
+selected specification, and a cost model with no borrow, impact or capacity. It
+supports a narrow claim and no more.
 
 ---
 
@@ -121,14 +126,41 @@ constraint. The winner drops residual momentum, which the ablation had already
 flagged as the redundant half of the momentum pair.
 
 **The sealed test.** One run. Gross Sharpe 1.52, HAC t 2.76, net 1.22 at 10 bp,
-beta minus 0.065, max drawdown 4.1 percent.
+beta minus 0.065, max drawdown 4.1 percent. Recomputed after the review's
+corrections, same locked book: 1.43, t 2.71, net 1.06, breakeven 38 bp.
 
 **What I say about it.** It's a real out-of-sample result on a frozen
 specification and it's nominally significant. It is also not significantly
-*better* than the selection-sample estimate -- that difference has a t of 1.55 --
-the Sharpe interval runs 0.44 to 2.60, the book was the best of twenty
-correlated candidates, and the cost model has no borrow, impact or capacity. Two
-adjacent positive years are consistency, not two experiments.
+*better* than the selection-sample estimate -- that difference has a t of about
+1.5 -- the Sharpe interval runs roughly 0.4 to 2.5, the book was the best of
+twenty correlated candidates, and the cost model has no borrow, impact or
+capacity. Two adjacent positive years are consistency, not two experiments.
+
+**The review.** After I'd called it finished, an external review found nine
+defects, a follow-up review of my fixes found five more, a third review of
+*those* fixes found two more, and a fourth review of *those* found two more
+still -- eighteen in total (9+5+2+2; I'd mis-added it to nineteen at one point,
+which the fourth review also caught). The two that moved the numbers most: my
+engine compared today's target weights with yesterday's *targets*, so it
+reported zero trading whenever targets were unchanged even though restoring
+them after a price move is a trade -- turnover went from 8.9 to 10.4 times a
+year and breakeven from 50 to 38 bp; and my model IC series was never sorted by
+date before its Newey-West statistic, so the "t of 8.8" on the models'
+ordering skill was an artefact -- sorted, it's about 2. I fixed all eighteen,
+recomputed everything from the raw file under the unchanged lock, and
+published every version side by side rather than quietly replacing the
+numbers.
+
+**The correction I'd lead with, because it's the one I got wrong twice.** Asked
+whether the data had delisting returns, I scanned the raw file and said no. My
+scan filtered on the same common-share identity screen that was excluding them
+from the panel -- delisting rows carry placeholder classifications, security
+type "N/A", price zero -- so it confirmed its own premise. There are 11,824 of
+them, 11,445 with a return. The reviewer found them by scanning without the
+filter and handed me a position I'd held: a stock that delisted at -3.2% while
+the book was long it. The lesson isn't "check delisting data"; it's that a
+verification query built from the same assumption as the code it's verifying
+proves nothing, and I should have scanned the raw file unfiltered first.
 
 ---
 
@@ -161,8 +193,34 @@ would have evaluated 2014-2025 and reported ten selection-sample years as the
 held-out result. It would have looked entirely plausible. Caught in review before
 the run.
 
+**On the bug I didn't find myself.** The review's turnover finding is the one
+I'd volunteer. A daily-rebalanced book's real trade is target minus *drifted*
+holding, W(t-1)(1+r)/(1+R_p), not target minus yesterday's target. It's a
+two-line change in SQL and it moved net Sharpe by 0.15. The lesson is that a
+hand-calculated two-stock example through entry, drift and exit should have been
+in the test suite from day one; it is now.
+
+**On what the engine still is.** A cost overlay on a daily-rebalanced target
+book, not a cash-reconciled execution simulator: NAV growth uses the gross
+return for every cost tier and costs come off additively. A delisted name used
+to stay on the books as ordinary equity, keeping its stale target weight after
+the event, so the engine's own rebalancing math tried to "buy back" a
+wiped-out security -- a -100% synthetic case made that undeniable. It's now
+settled to cash the day after its event, which explains 99.48% of what I'd
+been reporting as a residual, disclosed data limitation. I initially settled
+*every* event the same way, including the rare one where the event's own
+return is unknown -- silently assuming a zero-return payoff there is an
+assumption, not an observation, so that case (one short position, 0.056% of
+NAV, in the actual locked book) is now measured and disclosed on its own. And
+the diagnostic I built to size "trades with no observed execution price" only
+ever checked whether CRSP recorded a return that day, nothing about price or
+trading status, so I renamed it to say exactly that -- it's now
+`traded_missing_execution_return`, 0.002% of notional, and I no longer claim
+it audits tradability.
+
 **On statistics.** Targets overlap twenty days, so every t-statistic is
-Newey-West at twenty lags. When I first reported a confidence interval I used an
+Newey-West at twenty lags -- and the series has to be *sorted* first, which
+Week 4's wasn't. When I first reported a confidence interval I used an
 iid Sharpe approximation alongside a HAC test and called both correct, which was
 incoherent -- the HAC-consistent interval is 0.44 to 2.60 and it governs; the iid
 one is a sensitivity. And Weeks 3-5 taught me to distrust slices: the

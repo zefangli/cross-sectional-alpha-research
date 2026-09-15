@@ -52,14 +52,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import numpy as np
 import pandas as pd
 
-from src.evaluation.factor_eval import newey_west_tstat, OVERLAP_LAG
+from src.evaluation.factor_eval import newey_west_tstat, spearman_query, OVERLAP_LAG
 from src.evaluation.week3_baseline import COMPOSITE
 from src.evaluation.week4_models import NAMES, PNL_LAST, book_frame
 from src.features.factors import ALL_FACTORS
 from src.models.splits import walk_forward_splits
 from src.models.walk_forward import COHORT_LAST, PREDICTIONS
 from src.portfolio.backtest import (COSTS_BPS, TRADING_DAYS,
-                                     capped_neutral_weights, daily_book, performance_daily)
+                                     capped_neutral_weights, daily_book, performance_daily,
+                                     require_complete_marking)
 
 ROOT = Path(__file__).resolve().parents[2]
 PANEL = ROOT / "data" / "processed" / "factor_panel"
@@ -151,9 +152,9 @@ def merged_scan_query(factor_scan: str, exposures_scan: str, pnl_last: str) -> s
             WHERE fp.date <= DATE '{pnl_last}'
         )
         SELECT *,
-            CASE WHEN aligned THEN (RANK() OVER (PARTITION BY date ORDER BY beta_252) - 1.0)
+            CASE WHEN aligned THEN (RANK() OVER (PARTITION BY date, aligned ORDER BY beta_252) - 1.0)
                 / NULLIF(COUNT(*) FILTER (aligned) OVER d - 1, 0) END AS rank_beta_252,
-            CASE WHEN aligned THEN (RANK() OVER (PARTITION BY date ORDER BY log_mcap) - 1.0)
+            CASE WHEN aligned THEN (RANK() OVER (PARTITION BY date, aligned ORDER BY log_mcap) - 1.0)
                 / NULLIF(COUNT(*) FILTER (aligned) OVER d - 1, 0) END AS rank_log_mcap,
             {sector_cols}
         FROM joined
@@ -175,28 +176,28 @@ def book(con, scan: str, frame: pd.DataFrame, weighting: str, first_date: str, l
 
 def daily_rank_ic(con, scan: str, frame: pd.DataFrame) -> pd.Series:
     """Daily Spearman rank IC of `frame.rank` against the realised 20-day
-    forward return, matching the correlation-of-percentile-ranks construction
-    `week4_models.prediction_quality` and `factor_eval.cross_section_query`
-    both use."""
+    forward return.
+
+    Complete pairs only (non-null score and target), then Pearson correlation of
+    *average* ranks within that cross-section — the same convention as
+    `scipy.stats.spearmanr` / `rankdata(..., method='average')`, shared with
+    Weeks 2 and 4 through `factor_eval.spearman_query`.
+    """
     con.register("scored", frame[["permno", "tdi", "rank"]])
-    ic = con.sql(f"""
-        WITH y AS (
-            SELECT permno, tdi, date,
-                (RANK() OVER (PARTITION BY date ORDER BY forward_return_20d) - 1.0)
-                    / NULLIF(COUNT(*) OVER (PARTITION BY date) - 1, 0) AS y_rank
-            FROM {scan} WHERE forward_return_20d IS NOT NULL
-        )
-        SELECT y.date, corr(scored.rank, y.y_rank) AS ic
-        FROM scored JOIN y USING (permno, tdi)
-        GROUP BY y.date ORDER BY y.date
-    """).df()
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE scored_pairs AS
+        SELECT s.date, scored.rank AS score, s.forward_return_20d AS y
+        FROM scored JOIN {scan} s USING (permno, tdi)
+    """)
+    ic = con.sql(spearman_query("scored_pairs", "date", "score", "y") + " ORDER BY date").df()
     con.unregister("scored")
-    return ic.set_index("date")["ic"]
+    return ic.set_index("date")["ic_spearman"].rename("ic")
 
 
 def summarize(daily: pd.DataFrame, ic: pd.Series) -> dict:
     """Book statistics: the same block `week4_models.summarize` reports, plus
     mean rank IC/HAC-t and the three neutralisation exposures."""
+    require_complete_marking(daily)
     summary = {
         "days": len(daily),
         "first_date": str(daily.date.min().date()), "last_date": str(daily.date.max().date()),
@@ -204,6 +205,22 @@ def summarize(daily: pd.DataFrame, ic: pd.Series) -> dict:
         "mean_gross_exposure": daily.gross_exposure.mean(),
         "annual_turnover": daily.turnover.mean() * TRADING_DAYS,
         "breakeven_bp": 1e4 * daily.gross_return.mean() / daily.traded.mean(),
+        "positions_without_return_per_day": daily.positions_without_return.mean(),
+        "gross_without_return_per_day": daily.gross_without_return.mean(),
+        "max_gross_without_return": daily.gross_without_return.max(),
+        # Return-availability proxy only (2026-09-15 round 4 review): checks
+        # whether the panel has a return on the trade's execution date, not
+        # price, trading status, or settlement type. Do not read this as an
+        # untradeable-notional or fill-verification figure.
+        "traded_missing_execution_return_per_day": daily.traded_missing_execution_return.mean(),
+        "traded_missing_execution_return_share":
+            daily.traded_missing_execution_return.sum() / daily.traded.sum(),
+        # Settlement exits priced at an unknown (NULL) event return: a
+        # disclosed zero-return imputation, reported separately from ordinary
+        # settlement so it is never read as an observed payoff.
+        "gross_unknown_event_payoff_per_day": daily.gross_unknown_event_payoff.mean(),
+        "max_gross_unknown_event_payoff": daily.gross_unknown_event_payoff.max(),
+        "names_settled_unknown_payoff_total": int(daily.names_settled_unknown_payoff.sum()),
     }
     for column in ["gross_return"] + [f"net_return_{b}bp" for b in COSTS_BPS]:
         for key, value in performance_daily(daily[column], daily.market_return).items():

@@ -7,10 +7,23 @@ cutoff, so no return realised in 2024 enters any statistic.
 
 Portfolio convention: equal-weighted long decile 10 / short decile 1, rebuilt on
 non-overlapping 20-trading-day rebalance dates so holding periods never overlap.
-Weights sum to +1 long and -1 short (gross leverage 2). Turnover is
-TO_t = 0.5 * sum_i |w_it - w_i,t-1|, so a full rotation is TO = 2 and the traded
-notional is sum_i |dw| = 2 * TO. Costs are charged on traded notional:
-net = gross - 2 * c * TO. The first rebalance pays the cost of building the book.
+Weights sum to +1 long and -1 short (gross leverage 2). Traded notional at a
+rebalance is sum_i |w_it - h_i,t-1| where h is the previous book drifted by its
+own period return (see `portfolio`), TO_t = traded / 2, and costs are charged on
+traded notional: net = gross - c * traded. The first rebalance pays the cost of
+building the book.
+
+Formation and evaluation are separated (2026-09-14 review, items 2 and 5):
+ranks, deciles and weights are formed from every eligible row with a factor
+value, whether or not its 20-day target turns out to be observable; the
+information coefficient is a labelled diagnostic over complete (factor, target)
+pairs, ranked with average ranks so ties match `scipy.stats.spearmanr`. A held
+name is marked with `forward_return_20d_observed` -- whatever the panel observed
+in the next 20 trading days, delisting return included -- so a name whose data
+end mid-window keeps its known returns and accrues 0 only for the unobserved
+remainder (2026-09-15 follow-up, item 2). Names whose complete 20-day label is
+missing are counted in `names_without_target`; those with no observation at all
+accrue 0 and are counted in `names_without_any_return`.
 
 A 20-day rebalance can begin on any of 20 trading-day offsets, and at the
 turnover these factors run, that choice moves the result materially. Every
@@ -48,20 +61,58 @@ def eligible_query(fac: str, cutoff: str = CUTOFF) -> str:
     """
 
 
-def cross_section_query(elig: str) -> str:
-    """Winsorised, ranked and decile-bucketed cross-section for each date."""
+def average_rank_query(table: str, by: str, x: str, y: str) -> str:
+    """Complete (x, y) pairs within each `by` group, with average ranks
+    (`scipy.stats.rankdata(method='average')`) as `x_rank` and `y_rank`.
+
+    Rows where either side is NULL are dropped BEFORE ranking, so a missing
+    target can never occupy a rank. Ties get the mean of the positions they
+    span, which SQL `RANK()` (competition ranks) does not give.
+    """
+    return f"""
+        WITH paired AS (
+            SELECT {by}, {x} AS x, {y} AS y FROM {table}
+            WHERE {x} IS NOT NULL AND {y} IS NOT NULL
+        ), numbered AS (
+            SELECT {by}, x, y,
+                ROW_NUMBER() OVER (PARTITION BY {by} ORDER BY x, y) AS x_ord,
+                ROW_NUMBER() OVER (PARTITION BY {by} ORDER BY y, x) AS y_ord
+            FROM paired
+        )
+        SELECT {by}, x, y,
+            AVG(x_ord) OVER (PARTITION BY {by}, x) AS x_rank,
+            AVG(y_ord) OVER (PARTITION BY {by}, y) AS y_rank
+        FROM numbered
+    """
+
+
+def spearman_query(table: str, by: str, x: str, y: str) -> str:
+    """Spearman correlation of `x` and `y` per `by` group, complete pairs only."""
+    return f"""
+        SELECT {by}, corr(x_rank, y_rank) AS ic_spearman
+        FROM ({average_rank_query(table, by, x, y)}) GROUP BY {by}
+    """
+
+
+def cross_section_query(elig: str, observed: bool = False) -> str:
+    """Winsorised, ranked and decile-bucketed formation cross-section per date.
+
+    Every eligible row with a factor value is formed on; `y` (the complete
+    label) and `y_obs` (the observed-window marking return, when the source
+    carries it) are carried along, possibly NULL, and never condition
+    membership.
+    """
     return f"""
         SELECT permno, date, tdi, f, forward_return_20d AS y,
+            {'forward_return_20d_observed' if observed else 'forward_return_20d'} AS y_obs,
             LEAST(GREATEST(f, quantile_cont(f, 0.01) OVER d),
                   quantile_cont(f, 0.99) OVER d) AS f_wins,
             (RANK() OVER (PARTITION BY date ORDER BY f) - 1.0)
                 / NULLIF(COUNT(*) OVER d - 1, 0) AS f_rank,
-            (RANK() OVER (PARTITION BY date ORDER BY forward_return_20d) - 1.0)
-                / NULLIF(COUNT(*) OVER d - 1, 0) AS y_rank,
             NTILE(10) OVER (PARTITION BY date ORDER BY f) AS decile,
-            COUNT(*) OVER d AS n_used
+            COUNT(*) OVER d AS n_formed
         FROM {elig}
-        WHERE f IS NOT NULL AND forward_return_20d IS NOT NULL
+        WHERE f IS NOT NULL
         WINDOW d AS (PARTITION BY date)
     """
 
@@ -79,12 +130,27 @@ def newey_west_tstat(x, lags: int) -> float:
 
 
 def portfolio(weights: pd.DataFrame) -> pd.DataFrame:
-    """Gross/net long-short results from (date, permno, w, y) rebalance weights."""
+    """Gross/net long-short results from (date, permno, w, y) rebalance weights.
+
+    Traded notional at each rebalance is |w_t - h_{t-1}| summed over names,
+    where h_{t-1} is the previous book after its own period return, as a
+    fraction of the grown NAV: h = w_{t-1}(1 + y_{t-1}) / (1 + gross_{t-1}).
+    `y` is the marking return (observed window); a NULL `y` accrues 0 and
+    drifts as 0. An optional `y_label` column (the complete 20-day target) is
+    only counted, never used for P&L.
+    """
     w = weights.pivot_table(index="date", columns="permno", values="w", fill_value=0.0)
-    gross = weights.assign(pnl=weights.w * weights.y).groupby("date").pnl.sum()
-    traded = w.diff().abs().sum(axis=1)
-    traded.iloc[0] = w.iloc[0].abs().sum()
-    out = pd.DataFrame({"gross_return": gross, "turnover": traded / 2.0})
+    y = weights.pivot_table(index="date", columns="permno", values="y", fill_value=0.0) \
+        .reindex(index=w.index, columns=w.columns, fill_value=0.0)
+    gross = (w * y).sum(axis=1)
+    held = (w * (1 + y)).div(1 + gross, axis=0).shift(1).fillna(0.0)
+    traded = (w - held).abs().sum(axis=1)
+    label = weights["y_label"] if "y_label" in weights else weights.y
+    out = pd.DataFrame({
+        "gross_return": gross, "turnover": traded / 2.0,
+        "names_without_target": label.isna().groupby(weights.date).sum().reindex(w.index),
+        "names_without_any_return": weights.y.isna().groupby(weights.date).sum().reindex(w.index),
+    })
     for bps in COSTS_BPS:
         out[f"net_return_{bps}bp"] = out.gross_return - (bps / 1e4) * traded
     return out
@@ -110,19 +176,30 @@ def performance(returns: pd.Series) -> dict:
 def evaluate(con, source: str, name: str, cutoff: str = CUTOFF) -> dict:
     sign = FACTOR_SIGN[name]
     con.execute(f"CREATE OR REPLACE TEMP TABLE fac AS {factor_query(source, name)}")
-    con.execute(f"CREATE OR REPLACE TEMP TABLE elig AS {eligible_query('fac', cutoff)}")
-    con.execute(f"CREATE OR REPLACE TEMP TABLE xs AS {cross_section_query('elig')}")
+    # The observed-window marking return rides alongside the factor rows; it is
+    # not a factor input, so it is joined back from the panel rather than
+    # threaded through `factor_query`.
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE elig AS
+        SELECT e.*, s.forward_return_20d_observed
+        FROM ({eligible_query('fac', cutoff)}) e
+        JOIN {source} s USING (permno, date)
+    """)
+    con.execute(f"CREATE OR REPLACE TEMP TABLE xs AS {cross_section_query('elig', observed=True)}")
 
+    # IC is a labelled diagnostic over complete (factor, target) pairs; n_used
+    # counts those pairs, n_formed the formation universe they sit inside.
     daily = con.sql("""
         SELECT date, COUNT(*) AS n_eligible, COUNT(f) AS n_factor,
                COUNT(CASE WHEN f IS NOT NULL AND forward_return_20d IS NOT NULL
                           THEN 1 END) AS n_used
         FROM elig GROUP BY date ORDER BY date
     """).df().merge(con.sql("""
-        SELECT date, corr(f_wins, y) AS ic_pearson, corr(f_rank, y_rank) AS ic_spearman
-        FROM xs GROUP BY date
-    """).df(), on="date", how="left")
+        SELECT date, corr(f_wins, y) AS ic_pearson FROM xs GROUP BY date
+    """).df(), on="date", how="left").merge(
+        con.sql(spearman_query("xs", "date", "f", "y")).df(), on="date", how="left")
     daily["coverage"] = daily.n_factor / daily.n_eligible
+    daily["target_coverage"] = daily.n_used / daily.n_factor
 
     # Rank persistence: the same stock's cross-sectional factor rank 1 and 20 days on.
     autocorr = con.sql("""
@@ -143,8 +220,8 @@ def evaluate(con, source: str, name: str, cutoff: str = CUTOFF) -> dict:
     """).df()
 
     weights = con.sql(f"""
-        SELECT tdi, date, permno, y, w FROM (
-            SELECT tdi, date, permno, y,
+        SELECT tdi, date, permno, y_obs AS y, y AS y_label, w FROM (
+            SELECT tdi, date, permno, y, y_obs,
                 CASE WHEN decile = 10
                           THEN {sign} * 1.0 / COUNT(*) FILTER (decile = 10) OVER d
                      WHEN decile = 1
@@ -165,6 +242,8 @@ def evaluate(con, source: str, name: str, cutoff: str = CUTOFF) -> dict:
     per_offset = pd.DataFrame([
         {"offset": book.offset.iloc[0], "rebalances": len(book),
          "mean_turnover": book.turnover.mean(),
+         "mean_names_without_target": book.names_without_target.mean(),
+         "mean_names_without_any_return": book.names_without_any_return.mean(),
          **{f"{c}_{k}": v for c in columns for k, v in performance(book[c]).items()}}
         for book in books])
 
@@ -172,8 +251,11 @@ def evaluate(con, source: str, name: str, cutoff: str = CUTOFF) -> dict:
         "factor": name, "hypothesised_sign": sign,
         "first_date": str(daily.date.min().date()),
         "last_date": str(daily.date.max().date()),
-        "dates": len(daily), "mean_names_per_date": daily.n_used.mean(),
+        "dates": len(daily), "mean_names_per_date": daily.n_factor.mean(),
+        "mean_complete_pairs_per_date": daily.n_used.mean(),
         "mean_coverage": daily.coverage.mean(), "min_coverage": daily.coverage.min(),
+        "mean_target_coverage": daily.target_coverage.mean(),
+        "min_target_coverage": daily.target_coverage.min(),
         "mean_ic_pearson": daily.ic_pearson.mean(),
         "sd_ic_pearson": daily.ic_pearson.std(ddof=1),
         "icir_pearson_daily": daily.ic_pearson.mean() / daily.ic_pearson.std(ddof=1),
@@ -236,10 +318,24 @@ def figure(name: str, out: dict, path: Path) -> None:
     fig.savefig(path, dpi=120)
 
 
-def main() -> None:
+def factor_names(argv: list, names=None) -> list:
+    """Explicit `names` win; otherwise positional CLI arguments; otherwise all.
+    A caller embedding this module (the correction runner) passes `names`
+    explicitly so a foreign flag such as `--from-step` on `sys.argv` is never
+    mistaken for a factor (2026-09-15 follow-up, item 4)."""
+    if names is not None:
+        return list(names)
+    unknown = [a for a in argv if not a.startswith("-") and a not in ALL_FACTORS]
+    if unknown and not any(a.startswith("-") for a in argv):
+        raise SystemExit(f"unknown factor name(s) {unknown}; choose from {ALL_FACTORS}")
+    positional = [a for a in argv if a in ALL_FACTORS]
+    return positional or list(ALL_FACTORS)
+
+
+def main(names=None) -> None:
     import duckdb
 
-    names = sys.argv[1:] or ALL_FACTORS
+    names = factor_names(sys.argv[1:], names)
     if not PANEL.exists():
         sys.exit("Research panel not found. Run src/data/build_research_panel.py first.")
     con = duckdb.connect()

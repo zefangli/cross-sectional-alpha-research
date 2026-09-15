@@ -151,15 +151,30 @@ def require_clean_source(paths: tuple = FROZEN_PATHS) -> None:
 
 def require_frozen_runner(recorded_commit: str) -> None:
     """The content of THIS file at `recorded_commit` must be byte-identical to
-    what is actually executing.
+    what is actually executing, and the whole `src/` tree at HEAD must be the
+    tree the lock was generated from.
 
     Ancestry only proves the lock's commit precedes HEAD; a clean working tree
     only proves disk matches HEAD. Neither proves HEAD's own copy of this
     particular file is the one the lock was generated against -- a later edit
     to this runner, committed after the lock, would sail through both of those
-    checks. This is the check that actually authenticates the executing code
-    against the frozen specification.
+    checks. Nor would a later committed change to the backtest, factor or
+    neutralisation code this runner imports (2026-09-14 review, item 8), so the
+    `src/` tree hash is compared as well. What is still NOT authenticated:
+    the generated factor/exposure panels and the package versions; the
+    guarantee is "the committed research source is the locked one", no more.
+    (At the actual sealed run, commits fbbe574 and 084f5eb shared `src/` tree
+    268447d8, so this stronger check would have passed.)
     """
+    recorded_tree = _git("rev-parse", f"{recorded_commit}:src")
+    head_tree = _git("rev-parse", "HEAD:src")
+    if recorded_tree.returncode != 0 or head_tree.returncode != 0:
+        raise ValueError(f"could not resolve the src/ tree at {recorded_commit} or HEAD")
+    if recorded_tree.stdout.strip() != head_tree.stdout.strip():
+        raise ValueError(
+            f"src/ at HEAD ({head_tree.stdout.strip()[:12]}) is not the tree the specification "
+            f"was locked against at {recorded_commit} ({recorded_tree.stdout.strip()[:12]}) -- "
+            "refusing to run: the research code this runner imports has changed since the lock")
     shown = _git("show", f"{recorded_commit}:{RUNNER_PATH}")
     if shown.returncode != 0:
         raise ValueError(
@@ -442,13 +457,32 @@ def frozen_protocol(spec: dict, first_date: str, cohort_last: str, pnl_last: str
     }
 
 
-def replay(con, scan: str, exp_scan: str, spec: dict) -> pd.DataFrame:
+def replay_out_dir(targets_path) -> Path:
+    """Replay against the lock's own numbers writes into the historical
+    `reports/week6/`; replay against an external targets file writes next to
+    that file, so the corrected workflow never touches the original record
+    (2026-09-15 follow-up, item 5)."""
+    return OUT if targets_path is None else Path(targets_path).resolve().parent
+
+
+def replay(con, scan: str, exp_scan: str, spec: dict, targets: dict = None,
+           out_dir: Path = None) -> pd.DataFrame:
     """Run the locked book over 2014-01-02..2023-11-30, P&L to 2023-12-29, and
     assert it reproduces the recorded Week 5 numbers -- proof this runner
-    executes the frozen specification correctly, using only pre-2024 data."""
-    missing = [f for f in REPLAY_REQUIRED_TARGETS if f not in spec]
+    executes the frozen specification correctly, using only pre-2024 data.
+
+    `targets` defaults to the numbers recorded in the lock itself, which the
+    original (tag `project-1-complete`) source reproduces. Corrected source
+    reproduces the corrected recomputation instead, so the post-fix audit
+    writes its own `replay_targets.json` and the caller passes it here
+    (2026-09-14 review, item 9). The specification is never the thing that
+    varies; only which run's numbers are being reproduced.
+    """
+    targets = spec if targets is None else targets
+    out_dir = OUT if out_dir is None else out_dir
+    missing = [f for f in REPLAY_REQUIRED_TARGETS if f not in targets]
     if missing:
-        raise ValueError(f"locked specification missing replay target field(s): {missing}")
+        raise ValueError(f"replay targets missing field(s): {missing}")
     cohort_last = cohort_cutoff(con, scan, REPLAY_PNL_LAST, spec["hold_days"])
     first_date = formation_start(con, scan, cohort_last)
     daily, summary, coverage = run_locked_book(con, scan, exp_scan, spec, first_date,
@@ -457,17 +491,17 @@ def replay(con, scan: str, exp_scan: str, spec: dict) -> pd.DataFrame:
 
     check_map = {"realised_beta": "gross_return_market_beta", "gross_sharpe": "gross_return_sharpe",
                 "net_sharpe_10bp": "net_return_10bp_sharpe",
-                **{k: v for k, v in REPLAY_OPTIONAL_TARGETS.items() if k in spec}}
-    rows = [{"metric": k, "computed": summary[v], "recorded_week5": spec[k],
-             "matches": bool(np.isclose(summary[v], spec[k], **REPLAY_TOLERANCE))}
+                **{k: v for k, v in REPLAY_OPTIONAL_TARGETS.items() if k in targets}}
+    rows = [{"metric": k, "computed": summary[v], "recorded_week5": targets[k],
+             "matches": bool(np.isclose(summary[v], targets[k], **REPLAY_TOLERANCE))}
             for k, v in check_map.items()]
     result = pd.DataFrame(rows)
     if not result["matches"].all():
-        raise AssertionError(f"replay does not reproduce the locked Week 5 numbers:\n{result}")
+        raise AssertionError(f"replay does not reproduce the recorded Week 5 numbers:\n{result}")
 
-    OUT.mkdir(parents=True, exist_ok=True)
-    result.to_csv(OUT / "replay_validation.csv", index=False)
-    (OUT / "replay_protocol.json").write_text(
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result.to_csv(out_dir / "replay_validation.csv", index=False)
+    (out_dir / "replay_protocol.json").write_text(
         json.dumps(frozen_protocol(spec, first_date, cohort_last, REPLAY_PNL_LAST, sealed=False,
                                    metric_coverage=coverage),
                    indent=2, default=str))
@@ -497,11 +531,16 @@ def run_sealed(con, scan: str, exp_scan: str, spec: dict) -> dict:
 
 def main(argv=None) -> None:
     argv = sys.argv[1:] if argv is None else argv
-    if len(argv) != 1 or argv[0] not in (REPLAY_MODE, SEAL_MODE):
-        sys.exit(f"usage: week6_final.py {{{REPLAY_MODE}|{SEAL_MODE}}}\n"
-                 f"The sealed mode opens 2024-2025 exactly once. There is no default "
-                 f"and no way to reach it without typing the literal opt-in string.")
+    usage = (f"usage: week6_final.py {REPLAY_MODE} [targets.json] | week6_final.py {SEAL_MODE}\n"
+             f"The sealed mode opens 2024-2025 exactly once. There is no default "
+             f"and no way to reach it without typing the literal opt-in string.")
+    if not argv or argv[0] not in (REPLAY_MODE, SEAL_MODE):
+        sys.exit(usage)
     sealed = argv[0] == SEAL_MODE
+    if (sealed and len(argv) != 1) or (not sealed and len(argv) > 2):
+        sys.exit(usage)
+    targets_path = argv[1] if len(argv) == 2 else None
+    targets = json.loads(Path(targets_path).read_text()) if targets_path else None
     if sealed:
         require_clean_source()
 
@@ -530,8 +569,11 @@ def main(argv=None) -> None:
               f"{summary['net_return_10bp_sharpe']:.4f}, beta "
               f"{summary['gross_return_market_beta']:.4f}")
     else:
-        result = replay(con, scan, exp_scan, spec)
-        print("\nReplay reproduces the locked Week 5 numbers:\n", result.to_string(index=False))
+        out_dir = replay_out_dir(targets_path)
+        result = replay(con, scan, exp_scan, spec, targets, out_dir)
+        print("\nReplay reproduces the recorded Week 5 numbers:\n", result.to_string(index=False))
+        print(f"\nWrote {out_dir}")
+        return
     print(f"\nWrote {OUT}")
 
 

@@ -1,0 +1,18 @@
+{
+  "label": "post_fix_audit_vs_sealed",
+  "generated_at": "2026-09-15T04:53:45Z",
+  "audit": {
+    "gross_return_sharpe": 1.4294298828110075,
+    "net_return_10bp_sharpe": 1.0581478113261473,
+    "gross_return_market_beta": -0.06307723021885636,
+    "mean_rank_ic": 0.030935011430810806,
+    "days": 501
+  },
+  "sealed_pre_fix": {
+    "gross_return_sharpe": 1.5215662995182317,
+    "net_return_10bp_sharpe": 1.215139205951774,
+    "gross_return_market_beta": -0.06515631986736849,
+    "mean_rank_ic": 0.036353514618908664,
+    "days": 501
+  }
+}

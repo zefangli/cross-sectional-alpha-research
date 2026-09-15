@@ -47,6 +47,36 @@ def test_eligibility_does_not_use_future_rows():
     assert baseline.loc[baseline.date == target_date, 'eligibility_flag'].item() == future_changed.loc[future_changed.date == target_date, 'eligibility_flag'].item()
 
 
+def test_eligibility_is_decided_at_the_previous_close():
+    """2026-09-14 review, item 6: the $5 screen on day t's own close made the
+    cross-section depend on information not known when the book is formed.
+    Price(t) must be irrelevant to eligibility(t); price(t-1) decides it."""
+    baseline = panel(rows(300)).sort_values('date').reset_index(drop=True)
+    t = 270
+    assert baseline.loc[t, 'eligibility_flag']
+
+    same_day = rows(300)
+    same_day[t] = (*same_day[t][:3], 4.99, *same_day[t][4:])
+    same_day = panel(same_day).sort_values('date').reset_index(drop=True)
+    assert same_day.loc[t, 'eligibility_flag']
+    assert not same_day.loc[t + 1, 'eligibility_flag']
+
+    prior_day = rows(300)
+    prior_day[t - 1] = (*prior_day[t - 1][:3], 4.99, *prior_day[t - 1][4:])
+    prior_day = panel(prior_day).sort_values('date').reset_index(drop=True)
+    assert not prior_day.loc[t, 'eligibility_flag']
+
+
+def test_eligibility_requires_the_previous_trading_day_to_be_observed():
+    gapped = rows(300)
+    del gapped[269]
+    gapped += [tuple([2, *row[1:]]) for row in rows(300)]   # filler keeps the calendar
+    result = panel(gapped)
+    result = result[result.permno == 1].sort_values('date').reset_index(drop=True)
+    assert result.loc[268, 'eligibility_flag']
+    assert not result.loc[269, 'eligibility_flag']   # row 270 originally; t-1 missing
+
+
 def test_forward_return_uses_the_next_twenty_returns():
     result = panel(rows(30))
     expected = 1.01 ** 20 - 1

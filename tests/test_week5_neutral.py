@@ -112,3 +112,64 @@ def test_neutralise_removes_a_pure_beta_tilt_leaving_only_independent_signal():
     corr_by_date = out.groupby("date").apply(
         lambda g: np.corrcoef(g["rank"], g["beta_252_w"])[0, 1])
     assert corr_by_date.abs().max() < 0.1
+
+
+def test_daily_rank_ic_is_one_for_perfect_order_within_scored_set():
+    """Join complete pairs first, then rank — a larger unused y-universe must
+    not dilute a perfectly ordered scored cross-section."""
+    import duckdb
+    from src.evaluation.week5_neutral import daily_rank_ic
+
+    ys = [1.0, 2.0, 100.0]
+    fillers = list(np.linspace(3, 99, 50))
+    all_y = ys + fillers
+    n = len(all_y)
+    panel = pd.DataFrame({
+        "permno": list(range(n)), "tdi": [1] * n,
+        "date": pd.to_datetime(["2020-01-02"] * n),
+        "forward_return_20d": all_y,
+    })
+    scored = pd.DataFrame({"permno": [0, 1, 2], "tdi": [1, 1, 1], "rank": [0.0, 0.5, 1.0]})
+    con = duckdb.connect()
+    con.register("panel", panel)
+    assert abs(float(daily_rank_ic(con, "panel", scored).iloc[0]) - 1.0) < 1e-9
+
+
+def test_daily_rank_ic_uses_average_ranks_on_tied_targets():
+    import duckdb
+    from scipy.stats import spearmanr
+    from src.evaluation.week5_neutral import daily_rank_ic
+
+    panel = pd.DataFrame({
+        "permno": [1, 2, 3, 4], "tdi": [1] * 4,
+        "date": pd.to_datetime(["2020-01-02"] * 4),
+        "forward_return_20d": [1.0, 2.0, 2.0, 3.0],
+    })
+    scored = pd.DataFrame({
+        "permno": [1, 2, 3, 4], "tdi": [1] * 4, "rank": [1.0, 2.0, 3.0, 4.0],
+    })
+    con = duckdb.connect()
+    con.register("panel", panel)
+    ic = float(daily_rank_ic(con, "panel", scored).iloc[0])
+    expected = float(spearmanr(scored["rank"], panel["forward_return_20d"]).correlation)
+    assert abs(ic - expected) < 1e-9
+    assert abs(ic - 0.9486832980505139) < 1e-9
+
+
+def test_daily_rank_ic_drops_missing_scores_before_ranking():
+    import duckdb
+    from src.evaluation.week5_neutral import daily_rank_ic
+
+    panel = pd.DataFrame({
+        "permno": [1, 2, 3, 4], "tdi": [1] * 4,
+        "date": pd.to_datetime(["2020-01-02"] * 4),
+        "forward_return_20d": [0.1, 0.2, 0.3, 0.4],
+    })
+    # NULL score first would previously yield IC -0.2 under competition ranks
+    scored = pd.DataFrame({
+        "permno": [1, 2, 3, 4], "tdi": [1] * 4,
+        "rank": [np.nan, 0.0, 0.5, 1.0],
+    })
+    con = duckdb.connect()
+    con.register("panel", panel)
+    assert abs(float(daily_rank_ic(con, "panel", scored).iloc[0]) - 1.0) < 1e-9

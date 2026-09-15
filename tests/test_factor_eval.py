@@ -21,6 +21,7 @@ def frame(days=DAYS, seed=0):
         "shares_outstanding": 50_000.0,
         "eligibility_flag": True,
         "forward_return_20d": 0.0,
+        "delisting_flag": "N",
     })
 
 
@@ -179,8 +180,50 @@ def test_turnover_counts_exits_and_costs_scale_with_traded_notional():
     })
     book = portfolio(weights)
     assert abs(book.gross_return.iloc[0] - 0.15) < 1e-12
-    assert book.turnover.tolist() == [1.0, 1.0]      # build, then a one-name swap
+    assert abs(book.turnover.iloc[0] - 1.0) < 1e-12          # building the book
     assert abs(book.net_return_10bp.iloc[0] - (0.15 - 0.0010 * 2)) < 1e-12
+    # d2 rebalances from the drifted d1 book: 1 grew to 1.1/1.15, 2 shrank to
+    # -0.95/1.15 and is closed, 3 is opened.
+    held_1, held_2 = 1.1 / 1.15, -0.95 / 1.15
+    expected = abs(1.0 - held_1) + abs(0.0 - held_2) + 1.0
+    assert abs(book.turnover.iloc[1] - expected / 2) < 1e-12
+
+
+def test_a_missing_target_accrues_zero_and_is_counted_not_dropped():
+    weights = pd.DataFrame({"date": ["d1"] * 2, "permno": [1, 2],
+                            "w": [1.0, -1.0], "y": [0.10, np.nan]})
+    book = portfolio(weights)
+    assert abs(book.gross_return.iloc[0] - 0.10) < 1e-12
+    assert book.names_without_target.iloc[0] == 1
+
+
+def test_formation_universe_does_not_depend_on_future_target_availability():
+    """2026-09-14 review, item 2: blanking only the highest-signal stock's
+    future target must not remove it from today's ranks, deciles or weights."""
+    from src.evaluation.factor_eval import cross_section_query
+    con = duckdb.connect()
+    xs = pd.DataFrame({"permno": range(1, 11), "date": pd.Timestamp("2020-01-01"),
+                       "tdi": 1, "f": range(1, 11), "forward_return_20d": np.linspace(0, .1, 10)})
+    con.register("elig", xs)
+    before = con.sql(cross_section_query("elig")).df().set_index("permno")
+    xs.loc[xs.permno == 10, "forward_return_20d"] = np.nan
+    con.unregister("elig")
+    con.register("elig", xs)
+    after = con.sql(cross_section_query("elig")).df().set_index("permno")
+    assert 10 in after.index and after.loc[10, "decile"] == 10
+    assert (after.f_rank == before.f_rank).all() and (after.decile == before.decile).all()
+    assert pd.isna(after.loc[10, "y"]) and after.n_formed.iloc[0] == 10
+
+
+def test_spearman_query_matches_scipy_on_complete_pairs_with_ties():
+    from scipy.stats import spearmanr
+    from src.evaluation.factor_eval import spearman_query
+    con = duckdb.connect()
+    t = pd.DataFrame({"g": 1, "x": [0., 0., 1., 2., 5.], "y": [1., 2., 3., 4., np.nan]})
+    con.register("t", t)
+    ic = con.sql(spearman_query("t", "g", "x", "y")).df().ic_spearman.iloc[0]
+    assert abs(ic - spearmanr(t.x[:4], t.y[:4]).correlation) < 1e-12
+    assert abs(ic - 0.9486832980505139) < 1e-12
 
 
 def test_max_drawdown_counts_a_loss_before_any_new_high():

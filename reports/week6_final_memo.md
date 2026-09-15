@@ -1,5 +1,13 @@
 # Week 6: The sealed final test
 
+> **Superseded numbers, preserved record.** Four rounds of external review on
+> 2026-09-14 and 2026-09-15 found eighteen accounting, data and statistical
+> defects in the engine and panels this run used; the same locked specification
+> recomputed under the corrected code gives gross Sharpe 1.43 (HAC t 2.71), net
+> 1.06 at 10 bp (HAC t 2.01), breakeven 38.5 bp
+> (`reports/post_fix/week6_audit/`, and section 0 of `reports/final_report.md`).
+> This memo is left as written: it is the record of the one-shot run.
+
 Date: 2026-09-11. Experiment: W6-001. Run once, at commit `084f5eb`, against the
 specification locked at `fbbe574` in `reports/week5/locked_specification.json`.
 

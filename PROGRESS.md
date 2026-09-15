@@ -257,10 +257,184 @@
   Week 3 cluster, never fully defused.
 - Written up in `reports/week6_final_memo.md`. 71 tests pass.
 
+## Correction audit after external review (2026-09-14)
+
+- An external review of the finished project found nine defects
+  (`reports/project_review_2026-09-14.md`), each with a synthetic reproduction.
+  All nine were confirmed and fixed; the reproductions now assert the corrected
+  behaviour (`reports/review_checks.py`) and are pinned as pytest regressions.
+- Fixes, in the order they matter: (1) `daily_book` and the Week 2 `portfolio`
+  charge trading against holdings drifted by the previous day's returns over
+  the grown NAV, not against yesterday's targets; (2) Week 2 formation uses
+  every eligible stock with a signal, with IC a separate complete-pair
+  diagnostic; (3) the cleaner keeps every common-share row so held names keep
+  being marked, and the missing-return exposure is now measured in gross weight;
+  (4, 5) one shared average-rank Spearman helper serves Weeks 2, 4 and 5, and
+  the Week 4 daily IC series is sorted by date before Newey-West; (6)
+  eligibility at t is the screen at the close of t-1; (7) the lock is immutable
+  by default; (8) the frozen runner also checks the `src/` tree hash; (9) replay
+  takes a targets file and both versions are documented.
+- Whole pipeline recomputed from the raw export under the unchanged locked
+  specification into `reports/post_fix/` (cleaned panel 22,318,561 rows;
+  eligible 8,395,800). `reports/week6/` is untouched and remains the one-shot
+  record; `reports/post_fix/week6_audit/` is a labelled correction audit of a
+  period already seen, not a second sealed test.
+- **The Week 4 IC significance was an artefact (W7-002).** With the daily
+  series sorted before the HAC statistic, the models' rank-IC t falls from
+  7.7-8.8 to 2.0-2.3 while the mean IC barely moves. `gbm__decile` now edges the
+  composite on gross Sharpe (0.315 vs 0.281, HAC t about 1.0) and still loses
+  net of costs (-0.022 vs +0.125). Neutralisation still fails 7 of 8. `vs_20`
+  now survives Bonferroni (NW t 2.73) alongside `rvol_20`.
+- The lock was not re-selected: the candidate grid it came from is the original
+  record, and re-choosing after 2024-2025 has been seen would not be a lock.
+
+## Second correction round after the follow-up review (2026-09-15)
+
+- A follow-up review checked the corrections and found five more issues, one of
+  them a claim of mine that was simply wrong
+  (`reports/project_followup_review_2026-09-15.md`). It independently confirmed
+  89 tests, all four original reproductions, a fresh 2014-2023 replay matching
+  all five corrected targets, and the sealed artefacts unchanged.
+- **The export does contain delisting returns; my first audit said it did not
+  (W7-004).** 11,824 raw rows carry `DlyDelFlg = 'Y'`, 11,445 with a return.
+  My 2026-09-14 scan conditioned on the common-share identity screen -- the very
+  filter that excluded them -- so it confirmed its own premise. Event rows carry
+  placeholder classifications (`SecurityType = 'N/A'`, `TradingStatusFlg = 'D'`,
+  price 0). The reviewer's example: PERMNO 80621, held long, delisted at
+  -3.2161% on 2014-02-03, a return the panel did not have. The cleaner now keeps
+  one event row per delisted PERMNO it already knows (6,330 rows), deduplicated,
+  with identity rows winning ties; such a row is never a formation row
+  (`delisting_event_rows_eligible` = 0); the engine marks it like any other
+  return. 1,878 more eligible rows now carry a complete 20-day label.
+- **Week 2 erased known returns when the label was incomplete (W7-005).** A
+  holding whose data ended after a -50% day was marked flat for the whole
+  period. `forward_return_20d_observed` now compounds whatever was observed,
+  delisting return included, and is what the book is marked on; the complete
+  label remains the requirement for IC and model targets. Names with no
+  observation at all fall from about 3 per date to 0.006.
+- **The gap-P&L claim was too broad (W7-006).** The engine can book an entry or
+  expiry trade in a name with no observation that day. That is an execution
+  assumption, not an accounting identity; the claim is withdrawn and the
+  quantity is now reported as `traded_without_return`, 0.62% of traded notional
+  in 2024-2025.
+- Housekeeping from the same review: `--from-step` no longer crashes Week 2
+  (the runner's flag was being read as a factor name); corrected replay writes
+  next to its targets file and `reports/week6/` is verified byte-identical
+  afterwards; the stage-by-stage README commands are labelled as the
+  original-record workflow. A run also died to an OS out-of-memory kill, so the
+  audit runner now caps DuckDB at 5 GB with a spill directory.
+- **Corrected 2024-2025 after both rounds (W7-007): gross Sharpe 1.429 (HAC t
+  2.71); net Sharpe 1.39 / 1.24 / 1.06 / 0.69 at 1 / 5 / 10 / 20 bp, net@10bp
+  HAC t 2.01; breakeven 38.5 bp; turnover 10.4x; beta -0.063; max drawdown
+  -3.6%; rank IC 0.031 (HAC t 3.95); HAC 95% interval [0.40, 2.46].** Against
+  the original 1.522 / 2.76 / 1.215 / 49.7 bp / 8.9x. Selection sample 0.493
+  (HAC t 1.53), net 0.136, breakeven 13.8 bp; the difference is +0.94, SE 0.618,
+  t 1.51. Restoring delisting returns moved 2024-2025 by 0.0002 of Sharpe and
+  the selection sample by +0.006; it matters for correctness, not for the
+  headline. Conclusion unchanged: a weak signal that passed a fair test once,
+  with a smaller edge and a lower breakeven than first reported.
+- The first audit is archived, pruned of regenerable per-book daily series, at
+  `reports/post_fix_2026-09-14/`.
+- 97 tests pass.
+
+## Third correction round after a second follow-up review (2026-09-15)
+
+- A third review verified the delisting-ingestion fix and found it was
+  incomplete: the portfolio engine recognised an event's return but had no
+  state transition afterward, and a companion diagnostic checked the wrong day
+  (`reports/project_round3_review_2026-09-15.md`). It independently confirmed
+  97 tests, all six exchange-tested figures, a fresh 2014-2023 replay, and the
+  sealed artefacts unchanged by hash.
+- **A delisted name kept its stale pre-event target weight, and the
+  drift-aware trade math tried to restore it (W7-008).** Ingesting the event
+  return fixed the P&L on the event day; nothing zeroed the position
+  afterward. A synthetic -100% case showed the engine reporting a same-size
+  purchase of the wiped-out security the very next day. A name is now settled
+  to cash the day after any `delisting_flag='Y'` row: a single correctly-sized
+  exit trade (the drifted post-event value moving to zero, via
+  `daily_book`'s existing drift formula), then no further equity exposure or
+  missing-return flagging for that name. This is what the round-2 "0.51% of
+  NAV per day" figure actually was: 99.48% of it was retained equity in
+  already-settled names, not unresolved data
+  (`reports/review_round3_2026-09-15/event_exposure_check.py`). Settled:
+  positions with no return per day 7.01 -> 0.008; gross weight with no return
+  0.51% -> 0.0007% of NAV per day (max 2.19% -> 0.20%); mean gross exposure
+  0.9503 -> 0.9453 (freed capital not redeployed, disclosed, not a defect).
+- **`traded_without_return` (added in round 2) checked the wrong day (W7-009).**
+  The trade on row d executes at the close of d-1; the diagnostic filtered on
+  d's own return. Two synthetic entry cases showed this both misses a genuinely
+  unobservable execution and flags an observable one, depending on which side
+  of a gap the missing row falls. Fixed to check d-1, computed over every
+  calendar day a name is tracked so an entry trade still checks its true
+  predecessor; the terminal-liquidation trade is the one exception (it executes
+  at its own close). Combined with the settlement fix, 0.62% -> 0.002% of
+  traded notional.
+- **Corrected 2024-2025 after all three rounds (W7-010): gross Sharpe 1.4292
+  (HAC t 2.710); net Sharpe 1.392/1.244/1.058/0.687 at 1/5/10/20 bp, net@10bp
+  HAC t 2.009; breakeven 38.53 bp; turnover 10.350x; beta -0.0631; max drawdown
+  -3.64%; rank IC 0.0309 (HAC t 3.95); HAC 95% interval [0.40, 2.46].**
+  Essentially unchanged from round 2 (1.4294/2.708/1.0582/38.50 bp/10.352x):
+  these two fixes correct accounting integrity, not the book's dominant return
+  drivers. Selection sample 0.4935 (HAC t 1.530), net@10bp 0.1362, breakeven
+  13.81 bp; difference +0.936, SE 0.618, t 1.51.
+- Replay against `reports/post_fix/week5/replay_targets.json` reproduces all
+  five corrected targets to 1e-6; `reports/week6/`, the locked specification
+  and the original `final_daily.csv` verified byte-identical by hash before and
+  after.
+- Round 2's audit tree was overwritten in place rather than archived
+  separately: only two narrow accounting fixes intervened, both fully recorded
+  in W7-008/W7-009 above and in the round-2 text record, unlike round 1's
+  qualitatively different (data-completeness) correction.
+- 100 tests pass.
+
+## Fourth correction round after a third follow-up review (2026-09-15)
+
+- A fourth review verified round 3's settlement and diagnostic-timing fixes
+  and found two more narrow issues in the fix itself, plus an arithmetic error
+  in how many findings had been reported (9+5+2 is 16, not 19; with round 4's
+  own two findings the running total is 18)
+  (`reports/project_round4_review_2026-09-15.md`). It independently confirmed
+  100 tests, all four original checks, a fresh 2014-2023 replay, and every
+  numeric column of the saved 2024-2025 daily series recomputed from scratch,
+  and the sealed artefacts unchanged by hash and by `git status`.
+- **Settlement treated an unknown event payoff as a verified one (W7-011).**
+  `settled` (round 3) settles a name to cash the day after any delisting row
+  regardless of whether that row's own return is known. A NULL event return
+  already accrues 0 under the standing missing-return policy, so the
+  settlement exit converts the position to cash at its full pre-event value --
+  a disclosed zero-return imputation, not an observed payoff. Real in the
+  locked 2024-2025 book: PERMNO 16795, short, delisted 2024-10-28, no recorded
+  return, 0.056% of NAV. Kept the no-repurchase rule; added
+  `gross_unknown_event_payoff` and `names_settled_unknown_payoff` so this is
+  measured and reported separately rather than folded into ordinary
+  settlement. A NULL-event regression pins the exact policy (zero P&L on the
+  event day, an exit trade the day after, and that exit flagged as unknown).
+- **The execution diagnostic was mislabeled, not miscomputed (W7-012).** What
+  is now `traded_missing_execution_return` (renamed from
+  `traded_without_return`) correctly checks the trade's execution date
+  (round 3), but it only checks whether CRSP recorded a *return* there --
+  nothing about price, trading status, or settlement type. A retained
+  delisting row is exactly a case with a known return and no tradable price.
+  Withdrew the "no observed execution price" / untradeable-notional framing
+  from the README and final report; it is a return-availability proxy, stated
+  as such.
+- Recomputed Weeks 3-5 and the 2024-2025 audit (the only stages touching
+  `daily_book`/`week5_neutral.summarize`; re-cleaning, the research/factor
+  panels, exposures, predictions and Week 2 were unaffected and not rerun).
+  Headline figures are unchanged to the reported precision, as expected --
+  these are disclosure and diagnostic-scope fixes, not changes to `weight`,
+  `traded` or `gross_return`. Replay reproduces all five corrected 2014-2023
+  targets; `reports/week6/`, the locked specification and the original
+  `final_daily.csv` verified byte-identical by hash before and after.
+- 101 tests pass. Nothing committed yet.
+
 ## Next
 
-- Nothing. The specification is locked, the sealed period is spent, and this
-  test is not repeatable on this data.
+- Nothing on this data. The specification is locked, the sealed period is
+  spent, and this test is not repeatable on this data.
+- The reviewer's further suggestions stand as the next research additions,
+  none started: long/short attribution against standard risk factors, borrow
+  and impact costs with capacity scenarios, and genuinely new forward evidence.
 - The honest summary of the project: Weeks 2 through 5 found essentially nothing
   distinguishable from zero, and one pre-registered specification then survived a
   fair two-year out-of-sample test. That is a weak signal that passed a real

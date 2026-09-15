@@ -1,0 +1,9 @@
+{
+  "source": "reports/post_fix/week5/ablation_neutral.csv",
+  "book": "drop_rmom_120_20__neutral__decile",
+  "realised_beta": -0.0570741574078169,
+  "net_sharpe_10bp": 0.1293080864292032,
+  "gross_sharpe": 0.4869505230742041,
+  "gross_hac_t": 1.5093513269852663,
+  "max_drawdown": -0.1702126178653125
+}
