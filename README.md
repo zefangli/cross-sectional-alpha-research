@@ -102,10 +102,25 @@ seal is opened and is never removed.
 > ⚠️ **The sealed run has already happened.** Do not run `week6_final.py` in
 > sealed mode. The code will refuse — but don't try.
 
-## Quick start
+## Data
 
-The pipeline needs the raw CRSP export, which is **not versioned** (see
-`data_manifest.md`). Place it at `crsp/yb8xejbnpiflaprb.csv` and do not edit it.
+**Source: CRSP daily stock file, accessed via WRDS.**
+
+CRSP data is licensed, and the license prohibits redistribution. **No CRSP
+data — raw, cleaned, or derived — is published in this repository.** That
+includes the raw export, the cleaned panel, the research panel, per-security
+return series and index return series. All of it is excluded from version
+control; `data_manifest.md` records the export's provenance, integrity rule
+and column layout, but not its contents.
+
+What *is* published is this project's own output: source code, tests,
+pre-registration and result logs, portfolio-level summary statistics, memos
+and figures. Reproducing the results requires your own CRSP/WRDS entitlement.
+
+If you have one, place the export at `crsp/yb8xejbnpiflaprb.csv` and do not
+edit it in place.
+
+## Quick start
 
 ```powershell
 python -m venv .venv
@@ -208,5 +223,5 @@ of truth for research choices. This README summarises them.
 
 ---
 
-*Data: CRSP via WRDS. The raw export and all derived panels are excluded from
-version control under the terms of that license.*
+*Data source: CRSP via WRDS, used under licence and **not redistributed**.
+Code in `src/` and `tests/` is the author's own work. See [Data](#data).*

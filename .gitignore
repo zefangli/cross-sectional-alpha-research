@@ -22,7 +22,13 @@ Thumbs.db
 data/week4_run*.log
 reports/post_fix_run*.log
 
-# Correction-audit trees: keep summaries, protocols, figures and the locked
-# book's daily series; the other per-book daily series are regenerable.
-reports/post_fix*/**/daily_*.csv
-!reports/post_fix*/week5/daily_drop_rmom_120_20__neutral__decile.csv
+# CRSP-derived series are never published: these files carry the CRSP
+# value-weighted market return alongside the book's own daily P&L, and the
+# held_events files carry PERMNO-level CRSP returns. Summary statistics,
+# protocols and figures stay tracked; these do not. All are regenerable from
+# the raw export.
+daily_*.csv
+**/daily_*.csv
+**/audit_daily.csv
+**/final_daily.csv
+**/held_events.csv
